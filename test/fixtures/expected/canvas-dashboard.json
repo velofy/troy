@@ -1,0 +1,8 @@
+{
+  "mustContain": [
+    "Throughput: 8842 units",
+    "Backlog: 317 tickets",
+    "Uptime: 99.62 percent"
+  ],
+  "mustNotContain": []
+}
