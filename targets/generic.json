@@ -1,0 +1,12 @@
+{
+  "name": "generic",
+  "allowedHosts": [],
+  "requiresExplicitHost": true,
+  "fieldSelector": "textarea, input[type=text], input[type=url], input[type=email], input[type=tel], input:not([type]), [contenteditable=true]",
+  "skipSelector": "input[type=hidden], input[type=submit], input[type=button], input[type=checkbox], input[type=radio], input[type=file], input[type=password], [readonly], [disabled], [aria-hidden=true]",
+  "autosave": {
+    "strategy": "blur",
+    "settleMs": 900
+  },
+  "notes": "No host is allowed by default. Pass --allow-host <hostname> to authorize one explicitly for this run. This is deliberate: a generic target with a wildcard host would let a mistyped command type into any tab you have open."
+}

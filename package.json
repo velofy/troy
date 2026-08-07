@@ -1,0 +1,20 @@
+{
+  "name": "@anishfyi/troy",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A headless browser an agent can actually read: DOM for structure, OCR for the pixels the DOM cannot explain.",
+  "scripts": {
+    "detect": "node scripts/detect.mjs",
+    "fill": "node scripts/fill.mjs"
+  },
+  "dependencies": {
+    "playwright": "^1.62.0"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/anishfyi/troy.git"
+  },
+  "homepage": "https://anishfyi.com/troy"
+}
