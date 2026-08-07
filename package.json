@@ -6,7 +6,11 @@
   "description": "A headless browser an agent can actually read: DOM for structure, OCR for the pixels the DOM cannot explain.",
   "scripts": {
     "detect": "node scripts/detect.mjs",
-    "fill": "node scripts/fill.mjs"
+    "fill": "node scripts/fill.mjs",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "lint": "eslint src test"
   },
   "dependencies": {
     "playwright": "^1.62.0"
@@ -16,5 +20,14 @@
     "type": "git",
     "url": "git+https://github.com/anishfyi/troy.git"
   },
-  "homepage": "https://anishfyi.com/troy"
+  "homepage": "https://anishfyi.com/troy",
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "@typescript-eslint/eslint-plugin": "^8.66.0",
+    "@typescript-eslint/parser": "^8.66.0",
+    "eslint": "^10.8.1",
+    "tsx": "^4.23.11",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.10"
+  }
 }
