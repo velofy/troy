@@ -1,9 +1,24 @@
 # Troy v1 design
 
-Date: 2026-08-07
+Date: 2026-08-07, revised 2026-08-08
 Status: approved by Anish (interactive Q&A, this session)
-Repo: `anishfyi/troy` (public, MIT)
+Repo: `anishfyi/troy` (public, MIT). Single repo: the private `troy-browser`
+was absorbed on 2026-08-08 and is retired.
 Package: `@anishfyi/troy`, command `troy`
+
+## Revision 2, 2026-08-08
+
+Troy is no longer only a CLI. It ships as **a browser you open**, a desktop app
+with its own tabs, omnibox and back/forward, plus an agent panel, with the read
+and act engine wired into the window you are looking at. The CLI remains, over
+the same engine.
+
+What this changes, in one idea: **Electron's `webContents.debugger` is CDP**, the
+same protocol Playwright speaks. So the engine is written once against a thin
+`Cdp` port, and both hosts satisfy it: Playwright drives headless and remote
+Chromium for the CLI, Electron drives the tab in the app window. Nothing in
+`read/`, `ocr/` or `act/` knows which host it is running under. Sections 3 and 4
+below are unchanged by this revision; sections 8, 9 and 10 are new.
 
 ## What Troy is
 
@@ -25,12 +40,14 @@ Decisions locked during brainstorming:
    DOM cannot explain. The caller never picks a mode.
 3. Scope: reading is the headline, the existing action layer stays.
 4. Headless by default; the persistent logged-in profile is opt-in.
-5. TypeScript plus Playwright, shipped on npm.
+5. TypeScript plus Playwright, shipped on npm, plus an Electron desktop app
+   (revision 2).
 6. Logo: an abstract lens/aperture mark, flat, single accent.
 7. Public OSS under MIT.
 
-The existing private repo `anishfyi/troy-browser` stays as history. This is a new
-public repo, and the working code in it is ported rather than rewritten.
+`anishfyi/troy-browser` was absorbed into this repo on 2026-08-08: its verified
+action layer, targets, fixtures, test suite and Claude Code skill now live here.
+One repo from that point on.
 
 ## 1. Naming
 
@@ -204,16 +221,89 @@ unavailable on the host. The existing 11 action tests are ported.
 CI runs on ubuntu and macos: build, lint, typecheck, test. macOS is where the
 Apple Vision path is exercised; ubuntu proves the Tesseract fallback.
 
-## 8. Milestones
+## 8. The browser (desktop app)
 
-- **M1** Repo, TypeScript scaffold, `Session` (headless plus attach), CI green.
-- **M2** Extract plus markdown render. `troy read` works on DOM-only pages.
+An Electron app that opens like Chrome and is built for the thing Chrome is bad
+at: being driven and read by an agent.
+
+**Window.** A tab strip, an omnibox that accepts a URL or a search, back /
+forward / reload, and an **agent panel** down the right side. The page renders in
+a `WebContentsView`, so it is Chromium and pages behave exactly as they do in
+Chrome.
+
+**Agent panel.** Not a chat box bolted on. It shows what Troy sees and does to
+the current tab, live: the fused document with each line tagged `dom` or `ocr`,
+which regions were covered and why, which engine ran, and a running log of
+actions with their verification result. Clicking a line in the panel highlights
+its box in the page. This makes the thing Troy is otherwise asking you to trust
+directly visible, which is the whole argument for the product.
+
+**One engine, two hosts.** `Cdp` is a narrow port: send a CDP command, subscribe
+to events, take a screenshot. `PlaywrightCdp` backs the CLI. `ElectronCdp` wraps
+`webContents.debugger` and backs the app. `read/`, `ocr/` and `act/` depend only
+on `Cdp`, so a fix to the cover heuristic improves the CLI and the app at once
+and cannot drift between them.
+
+**Human and agent share the tab.** The agent works the same tab you are looking
+at, so you watch it happen and can take over mid-flow. Refusals still live in
+code: the agent cannot press submit in the app either.
+
+## 9. The agent bridge
+
+The app listens on a local port, loopback only, so an agent connects to the
+browser you already have open and logged in.
+
+- **Transport.** WebSocket on `127.0.0.1`, port written to
+  `~/.troy/bridge.json` along with a per-launch token. Loopback binding plus a
+  token, because a browser holding live logins must not be reachable from the
+  network or from a random page in another tab.
+- **Surface.** `read`, `goto`, `fill`, `click`, `state`, `tabs`, `screenshot`.
+  The same verified semantics as the CLI, because it is the same code.
+- **Consent.** Any mutating call against a tab the user did not hand over
+  requires an explicit grant, shown in the agent panel and remembered per origin
+  for the session. Reading is free; changing the page is not.
+- **MCP is out of scope** (standing rule). The bridge is a plain WebSocket an
+  agent or a small adapter can speak.
+
+## 10. Fixture suite and scoring
+
+The loop needs a number, or "better" is a matter of opinion. Twelve fixture pages
+served locally, each a hard case: plain article, canvas dashboard, image-with-
+text, embedded PDF, shadow DOM, cross-origin iframe, hidden-text trap, infinite
+scroll, late-hydrating SPA, data table, multi-column layout, and a form.
+
+Every run scores four numbers, checked into the repo so regressions are visible
+in a diff:
+
+- **Recovered**: expected lines present in the output (higher is better).
+- **False positives**: lines output that are not really on the page, the metric
+  that punishes OCR guessing (zero is the target).
+- **Hidden-text leaks**: text present in the DOM but not painted that reached the
+  output (must be zero, always).
+- **Cost**: milliseconds per page and regions OCR'd (lower is better; a plain
+  article must stay at zero regions).
+
+## 11. Milestones
+
+Ordered so the engine is worth wrapping before the shell wraps it. Every
+milestone ends with an independent adversarial review, fixes, and a re-review
+before the next one starts.
+
+- **M1** TypeScript scaffold, the `Cdp` port with its Playwright backing, the
+  fixture server and the scoring harness, CI green on ubuntu and macos.
+- **M2** Extract plus markdown render. `troy read` works on DOM-only pages and
+  scores on the fixture suite.
 - **M3** OCR engine interface, Apple Vision helper, Tesseract backend.
-- **M4** Cover plus fuse. The differentiator lands and the fixture suite passes.
-- **M5** Action layer ported and typed.
-- **M6** `--deep`, logo, docs, plugin, npm publish.
+- **M4** Cover plus fuse. The differentiator lands; hidden-text leaks at zero and
+  a plain article still OCRs nothing.
+- **M5** Action layer ported to TypeScript over the `Cdp` port, verification and
+  in-code refusals intact.
+- **M6** The Electron shell: tabs, omnibox, navigation, `ElectronCdp`, and the
+  agent panel rendering the fused document live.
+- **M7** The agent bridge: loopback WebSocket, token, per-origin consent.
+- **M8** `--deep`, packaging (`.dmg` and `.exe`), docs, plugin, npm publish.
 
-## 9. Out of scope for v1
+## 12. Out of scope for v1
 
 File upload, session recording and replay, multi-step flow resume, more site
 targets beyond `ycombinator` and `generic`, and any browser other than Chromium.
