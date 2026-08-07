@@ -1,8 +1,40 @@
 import { describe, it, expect, afterAll } from 'vitest'
+import http from 'node:http'
+import type { Socket } from 'node:net'
+import type { AddressInfo } from 'node:net'
 import { launchHeadless, listenerCountForTests } from '../src/cdp/playwright.js'
 
 const cdp = await launchHeadless()
 afterAll(() => cdp.close())
+
+// Fixture server for the navigation tests below. "/loads" completes
+// normally. "/never" writes a response but never ends it, so the raw
+// Page.navigate command still resolves (headers arrived) while Chrome never
+// fires Page.loadEventFired, since the document's own request never
+// finishes. This is the same shape as a javascript: URL, a download, or a
+// same-document navigation: send() resolving depends on the timeout race,
+// not on load ever firing.
+const openSockets = new Set<Socket>()
+const fixtureServer = http.createServer((req, res) => {
+  if (req.url === '/never') {
+    res.writeHead(200, { 'Content-Type': 'text/html' })
+    res.write('<html><body>stalled')
+    return
+  }
+  res.writeHead(200, { 'Content-Type': 'text/html' })
+  res.end('<h1 id="a">hi</h1>')
+})
+fixtureServer.on('connection', (socket) => {
+  openSockets.add(socket)
+  socket.on('close', () => openSockets.delete(socket))
+})
+await new Promise<void>((resolve) => fixtureServer.listen(0, '127.0.0.1', () => resolve()))
+const fixturePort = (fixtureServer.address() as AddressInfo).port
+
+afterAll(async () => {
+  for (const socket of openSockets) socket.destroy()
+  await new Promise<void>((resolve) => fixtureServer.close(() => resolve()))
+})
 
 describe('PlaywrightCdp', () => {
   it('evaluates javascript in the page', async () => {
@@ -21,9 +53,16 @@ describe('PlaywrightCdp', () => {
     await expect(cdp.evaluate('document.querySelector("nope").textContent')).rejects.toThrow(/TypeError/)
   })
 
-  it('resolves rather than hangs when a navigation does not settle before the timeout', async () => {
+  it('resolves rather than hangs when a navigation never fires loadEventFired', async () => {
     const start = Date.now()
-    await cdp.send('Page.navigate', { url: 'data:text/html,<h1>hi</h1>', timeoutMs: 1 })
+    await cdp.send('Page.navigate', { url: `http://127.0.0.1:${fixturePort}/never`, timeoutMs: 200 })
+    expect(Date.now() - start).toBeLessThan(2000)
+  })
+
+  it('resolves promptly via navigatedWithinDocument for a same-document (#hash) navigation', async () => {
+    await cdp.send('Page.navigate', { url: `http://127.0.0.1:${fixturePort}/loads` })
+    const start = Date.now()
+    await cdp.send('Page.navigate', { url: `http://127.0.0.1:${fixturePort}/loads#section` })
     expect(Date.now() - start).toBeLessThan(2000)
   })
 
@@ -33,5 +72,13 @@ describe('PlaywrightCdp', () => {
     }
     expect(listenerCountForTests(cdp, 'Page.loadEventFired')).toBe(0)
     expect(listenerCountForTests(cdp, 'Page.navigatedWithinDocument')).toBe(0)
+  })
+
+  it('does not remove an unrelated cdp.on() listener registered on the same event as a successful navigation', async () => {
+    const unsubscribe = cdp.on('Page.loadEventFired', () => undefined)
+    await cdp.send('Page.navigate', { url: 'data:text/html,<h1>hi</h1>' })
+    expect(listenerCountForTests(cdp, 'Page.loadEventFired')).toBe(1)
+    unsubscribe()
+    expect(listenerCountForTests(cdp, 'Page.loadEventFired')).toBe(0)
   })
 })

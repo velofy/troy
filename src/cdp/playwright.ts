@@ -59,15 +59,23 @@ async function buildCdp(page: Page, session: CDPSession, onClose: () => Promise<
   // tears every listener and the timer down, so it is safe, and necessary,
   // to call from a finally block regardless of which path settled first or
   // whether the navigate command itself rejected before anything settled.
+  // finish() runs from up to two call sites on the success path (the event
+  // handler or timer that settles it, then the finally block's cancel()),
+  // so it guards against running twice: without that, the second call would
+  // decrement countedOff for events an unrelated cdp.on() caller registered
+  // on the same event name, corrupting the shared listener count.
   function waitForNavigation(timeoutMs: number): { settled: Promise<void>; cancel: () => void } {
     let resolveSettled: () => void = () => undefined
     const settled = new Promise<void>((resolve) => {
       resolveSettled = resolve
     })
     let timer: ReturnType<typeof setTimeout> | undefined
+    let finished = false
     const registrations = NAVIGATE_SETTLE_EVENTS.map((event) => ({ event, handler: () => finish() }))
 
     function finish(): void {
+      if (finished) return
+      finished = true
       if (timer !== undefined) clearTimeout(timer)
       timer = undefined
       for (const { event, handler } of registrations) countedOff(event, handler)

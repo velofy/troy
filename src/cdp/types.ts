@@ -12,7 +12,9 @@ export interface Cdp {
    * timeout (default 30000ms; override by passing a `timeoutMs` field on
    * `params`) the promise resolves anyway rather than rejecting: a page
    * that never finishes loading is still readable, which is the point of
-   * Troy.
+   * Troy. The resolved value does not say which case happened; a caller
+   * that needs certainty should check page state itself afterward, for
+   * example with evaluate("document.readyState").
    */
   send<T = unknown>(method: string, params?: Record<string, unknown>): Promise<T>
   on(event: string, handler: (params: unknown) => void): () => void
