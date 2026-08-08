@@ -10,13 +10,14 @@ jobs:
   check:
     # Troy's tests launch a real Electron window and drive real navigations,
     # so they run on each platform it ships on rather than on one and a hope.
-    # Both Mac architectures, not just the one that happens to build the
-    # release: macos-latest is Apple silicon and macos-13 is Intel, and a
-    # browser is exactly the kind of program that can differ between them.
+    # GitHub has retired its Intel Mac runners, so there is no honest way to
+    # run this suite on Intel hardware here. The Intel build is covered where
+    # it still can be: the release workflow packages it and starts it under
+    # Rosetta, which catches a broken or unlaunchable x86_64 app.
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, macos-13, windows-latest, ubuntu-latest]
+        os: [macos-latest, windows-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4

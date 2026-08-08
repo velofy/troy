@@ -14,9 +14,11 @@ permissions:
 
 jobs:
   build:
-    # One native job per architecture. Cross-building the Intel Mac app from
-    # an Apple silicon runner would need Rosetta and prompt for it, and a
-    # build that waits on a dialog nobody can click just hangs.
+    # One job per artifact. The Intel Mac build would ideally run on an Intel
+    # runner, but GitHub has retired macos-13 and a job asking for it queues
+    # forever without ever being assigned one. So it cross-builds on Apple
+    # silicon with Rosetta installed first, because packaging an x86_64 app
+    # runs an x86_64 helper, and without Rosetta that step simply fails.
     strategy:
       fail-fast: false
       matrix:
@@ -24,9 +26,10 @@ jobs:
           - os: macos-latest
             flag: --mac --arm64
             artifact: mac-arm64
-          - os: macos-13
+          - os: macos-latest
             flag: --mac --x64
             artifact: mac-x64
+            rosetta: true
           - os: windows-latest
             flag: --win --x64
             artifact: windows-x64
@@ -38,6 +41,12 @@ jobs:
         with:
           node-version: 22
           cache: npm
+
+      # Packaging an x86_64 app on Apple silicon runs an x86_64 binary.
+      # Without this the build fails; on a desktop it would sit on a dialog.
+      - name: Install Rosetta for the Intel build
+        if: matrix.rosetta
+        run: sudo softwareupdate --install-rosetta --agree-to-license
 
       - run: npm ci
 

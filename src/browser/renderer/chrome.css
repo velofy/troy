@@ -66,14 +66,27 @@ html, body {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* Grid centring plus a drawn cross, so the icon is on the middle of the
+   button on every machine. A text "×" is placed by font metrics, which is
+   why it always looked a pixel high. */
 .tab .x {
   flex: none;
-  width: 16px; height: 16px;
+  width: 18px; height: 18px;
+  display: grid;
+  place-items: center;
+  padding: 0;
   border: 0; border-radius: 50%;
   background: transparent;
   color: inherit;
-  font-size: 14px; line-height: 14px;
   cursor: default;
+}
+.tab .x svg {
+  width: 10px; height: 10px;
+  display: block;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
 }
 .tab .x:hover { background: #5f6368; }
 .tab .fav {
@@ -90,6 +103,9 @@ html, body {
   flex: none;
   width: 28px; height: 28px;
   margin-bottom: 3px;
+  display: grid;
+  place-items: center;
+  padding: 0;
   border: 0; border-radius: 50%;
   background: transparent;
   color: var(--dim);

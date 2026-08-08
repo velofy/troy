@@ -31,6 +31,19 @@ let noticeTimer = 0
 // strip every time.
 const live = new Map()
 
+const SVG_NS = 'http://www.w3.org/2000/svg'
+
+function cross() {
+  const svg = document.createElementNS(SVG_NS, 'svg')
+  svg.setAttribute('viewBox', '0 0 12 12')
+  svg.setAttribute('aria-hidden', 'true')
+  svg.setAttribute('focusable', 'false')
+  const path = document.createElementNS(SVG_NS, 'path')
+  path.setAttribute('d', 'M3.4 3.4 L8.6 8.6 M8.6 3.4 L3.4 8.6')
+  svg.append(path)
+  return svg
+}
+
 function makeTab(id) {
   const root = document.createElement('div')
   root.className = 'tab'
@@ -55,9 +68,13 @@ function makeTab(id) {
   label.className = 'label'
   label.addEventListener('click', () => window.troy.selectTab(id))
 
+  // Drawn, not typed. The "×" character sits on the font's math axis rather
+  // than the middle of its box, so a text close button is always a little
+  // high or low, and by a different amount in every font the OS might pick.
+  // Two lines in a viewBox are centred by construction, everywhere.
   const close = document.createElement('button')
   close.className = 'x'
-  close.textContent = '×'
+  close.append(cross())
   close.addEventListener('click', (e) => {
     e.stopPropagation()
     window.troy.closeTab(id)

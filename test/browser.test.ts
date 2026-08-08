@@ -17,7 +17,7 @@ import type { TroyBridge } from '../src/browser/bridge.js'
 declare const window: { troy: TroyBridge }
 
 type ChromeElement = {
-  getBoundingClientRect(): { width: number }
+  getBoundingClientRect(): { width: number; height: number; top: number; left: number }
   setAttribute(name: string, value: string): void
   scrollWidth: number
   clientWidth: number
@@ -372,6 +372,20 @@ describe('the tab strip', () => {
       return strip.scrollWidth > strip.clientWidth + 1
     })
     expect(overflows).toBe(false)
+  })
+
+  it('centres the close icon in its button, both ways', async () => {
+    await resetToOneTab()
+    const offset = await chrome.evaluate(() => {
+      const button = document.querySelector('.tab .x')!.getBoundingClientRect()
+      const icon = document.querySelector('.tab .x svg')!.getBoundingClientRect()
+      return {
+        vertical: Math.abs(icon.top + icon.height / 2 - (button.top + button.height / 2)),
+        horizontal: Math.abs(icon.left + icon.width / 2 - (button.left + button.width / 2)),
+      }
+    })
+    expect(offset.vertical).toBeLessThan(0.5)
+    expect(offset.horizontal).toBeLessThan(0.5)
   })
 
   it('keeps the same element for a tab across updates, so favicons do not refetch', async () => {
