@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self' data:">
+<title>Troy</title>
+<link rel="stylesheet" href="chrome.css">
+</head>
+<body>
+  <div class="tabstrip" id="tabstrip">
+    <div class="traffic-spacer"></div>
+    <div class="tabs" id="tabs"></div>
+    <button class="newtab" id="newtab" title="New tab" aria-label="New tab">+</button>
+  </div>
+
+  <div class="toolbar">
+    <button class="nav" id="back" title="Back" aria-label="Back">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+    </button>
+    <button class="nav" id="forward" title="Forward" aria-label="Forward">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+    </button>
+    <button class="nav" id="reload" title="Reload" aria-label="Reload">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 10-1.6 5.3M20 5v6h-6"/></svg>
+    </button>
+
+    <div class="omnibox">
+      <svg class="omni-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+      <input id="omni" type="text" spellcheck="false" autocomplete="off"
+             aria-label="Search or enter address" placeholder="Search or enter address">
+    </div>
+
+    <button class="agent" id="panel" title="Agent panel" aria-label="Toggle agent panel">
+      <svg viewBox="0 0 32 32" aria-hidden="true">
+        <g fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="16" cy="16" r="9.4"/>
+          <path d="M16 12 L24.14 11.3"/><path d="M12.54 18 L7.86 11.3"/><path d="M19.46 18 L16 25.4"/>
+        </g>
+        <path d="M16 12 L19.46 18 H12.54 Z" fill="currentColor"/>
+      </svg>
+    </button>
+  </div>
+
+  <aside class="panel" id="agentpanel" hidden>
+    <div class="panel-head">
+      <span class="panel-title">agent</span>
+      <button id="readbtn" class="readbtn">read this page</button>
+    </div>
+    <div class="panel-body" id="panelbody">
+      <p class="hint">Troy reads the tab you are looking at. Structure comes from
+      the DOM, and the regions the DOM cannot explain get read from pixels.</p>
+    </div>
+  </aside>
+
+  <script src="chrome.js"></script>
+</body>
+</html>

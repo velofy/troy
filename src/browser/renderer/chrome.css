@@ -1,0 +1,172 @@
+/* Troy's chrome. Dark like Helium, with the tab strip and toolbar sized to
+   the 88px the main process reserves above every page view (CHROME_HEIGHT). */
+
+:root {
+  --chrome: #202124;
+  --strip: #17181a;
+  --tab: #35363a;
+  --tab-hover: #2b2c2f;
+  --field: #2f3033;
+  --ink: #e8eaed;
+  --dim: #9aa0a6;
+  --line: #3c4043;
+  --accent: #d97757;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--chrome);
+  color: var(--ink);
+  font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  overflow: hidden;
+  user-select: none;
+}
+
+/* ---------- tab strip ---------- */
+
+.tabstrip {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 44px;
+  padding: 6px 8px 0;
+  background: var(--strip);
+  -webkit-app-region: drag;
+}
+.traffic-spacer { width: 72px; flex: none; }
+.tabs { display: flex; align-items: flex-end; gap: 2px; overflow: hidden; }
+
+.tab {
+  -webkit-app-region: no-drag;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  min-width: 0;
+  max-width: 240px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px 8px 0 0;
+  background: transparent;
+  color: var(--dim);
+  font: inherit;
+  cursor: default;
+}
+.tab:hover { background: var(--tab-hover); }
+.tab.active { background: var(--tab); color: var(--ink); }
+.tab .label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tab .x {
+  flex: none;
+  width: 16px; height: 16px;
+  border: 0; border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  font-size: 14px; line-height: 14px;
+  cursor: default;
+}
+.tab .x:hover { background: #5f6368; }
+
+.newtab {
+  -webkit-app-region: no-drag;
+  flex: none;
+  width: 28px; height: 28px;
+  margin-bottom: 3px;
+  border: 0; border-radius: 50%;
+  background: transparent;
+  color: var(--dim);
+  font-size: 18px; line-height: 1;
+  cursor: default;
+}
+.newtab:hover { background: var(--tab-hover); color: var(--ink); }
+
+/* ---------- toolbar ---------- */
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 44px;
+  padding: 0 8px;
+  background: var(--chrome);
+}
+
+.nav, .agent {
+  flex: none;
+  width: 32px; height: 32px;
+  display: grid; place-items: center;
+  border: 0; border-radius: 50%;
+  background: transparent;
+  color: var(--dim);
+  cursor: default;
+}
+.nav:hover, .agent:hover { background: var(--tab-hover); color: var(--ink); }
+.nav:disabled { opacity: .35; }
+.nav svg, .agent svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.agent svg { width: 19px; height: 19px; }
+.agent.on { color: var(--accent); }
+
+.omnibox {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  margin: 0 6px;
+  padding: 0 12px;
+  border-radius: 16px;
+  background: var(--field);
+}
+.omnibox:focus-within { background: #3c4043; box-shadow: 0 0 0 2px #8ab4f8 inset; }
+.omni-icon { width: 15px; height: 15px; flex: none; fill: none; stroke: var(--dim); stroke-width: 2; stroke-linecap: round; }
+#omni {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  outline: none;
+  user-select: text;
+}
+#omni::placeholder { color: var(--dim); }
+
+/* ---------- agent panel ---------- */
+
+.panel {
+  position: fixed;
+  top: 88px; right: 0; bottom: 0;
+  width: 340px;
+  border-left: 1px solid var(--line);
+  background: #1a1b1d;
+  display: flex;
+  flex-direction: column;
+}
+.panel[hidden] { display: none; }
+.panel-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--line);
+}
+.panel-title {
+  font-size: 10.5px; letter-spacing: .18em; text-transform: uppercase; color: var(--accent);
+}
+.readbtn {
+  border: 1px solid var(--line); border-radius: 6px;
+  background: var(--tab); color: var(--ink);
+  font: inherit; font-size: 12px; padding: 5px 10px; cursor: default;
+}
+.readbtn:hover { background: #3c4043; }
+.panel-body { flex: 1; overflow: auto; padding: 14px; }
+.hint { margin: 0; color: var(--dim); font-size: 12px; line-height: 1.6; }
+.readout {
+  margin: 0; white-space: pre-wrap; word-break: break-word;
+  font: 11.5px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--ink); user-select: text;
+}
+.readmeta { margin: 0 0 10px; color: var(--dim); font-size: 11px; }
