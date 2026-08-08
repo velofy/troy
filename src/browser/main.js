@@ -12,7 +12,7 @@
 import { app, BrowserWindow, WebContentsView, ipcMain, shell, Menu, nativeImage, session } from 'electron'
 import path from 'node:path'
 import fs from 'node:fs'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { resolveOmnibox } from './omnibox.js'
 
 const dir = path.dirname(fileURLToPath(import.meta.url))
@@ -46,11 +46,20 @@ const NEW_TAB_URL = pageUrl('newtab.html')
 const ERROR_PAGE = pageUrl('error.html')
 
 /**
+ * The URL of one of Troy's own pages.
+ *
+ * Built with pathToFileURL rather than by gluing "file://" onto a path,
+ * because on Windows that glue produces "file://D:\...\newtab.html" while
+ * Chromium reports "file:///D:/.../newtab.html". Every prefix comparison
+ * against it then silently fails, which showed up as the new tab page
+ * leaking its own file path into the address bar and as the failure page
+ * not being recognised as the failure page.
+ *
  * @param {string} file
  * @returns {string}
  */
 function pageUrl(file) {
-  return `file://${path.join(dir, 'renderer', file)}`
+  return pathToFileURL(path.join(dir, 'renderer', file)).href
 }
 
 // Troy, not Electron, in the Dock, the menu bar and the userData path. Set
