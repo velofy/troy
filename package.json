@@ -3,7 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "A headless browser an agent can actually read: DOM for structure, OCR for the pixels the DOM cannot explain.",
+  "description": "A browser an agent can actually read: DOM for structure, OCR for the pixels the DOM cannot explain.",
+  "main": "src/browser/main.js",
+  "author": "Anish Kumar <anishfyi@gmail.com>",
   "scripts": {
     "detect": "node scripts/detect.mjs",
     "fill": "node scripts/fill.mjs",
@@ -11,10 +13,13 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "lint": "eslint src test",
-    "browser": "electron src/browser/main.js"
-  },
-  "dependencies": {
-    "playwright": "^1.62.0"
+    "browser": "electron src/browser/main.js",
+    "icons": "node scripts/icons.mjs",
+    "smoke": "node scripts/smoke-packaged.mjs",
+    "pack": "electron-builder --dir",
+    "dist:mac": "electron-builder --mac",
+    "dist:win": "electron-builder --win",
+    "dist": "electron-builder --mac --win"
   },
   "license": "MIT",
   "repository": {
@@ -27,7 +32,9 @@
     "@typescript-eslint/eslint-plugin": "^8.66.0",
     "@typescript-eslint/parser": "^8.66.0",
     "electron": "^43.3.0",
+    "electron-builder": "^26.15.3",
     "eslint": "^10.8.1",
+    "playwright": "^1.62.0",
     "tsx": "^4.23.11",
     "typescript": "^6.0.3",
     "vitest": "^4.1.10"

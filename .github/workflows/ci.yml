@@ -1,0 +1,38 @@
+name: ci
+
+on:
+  push:
+    branches: [main, 'build/**']
+  pull_request:
+    branches: [main]
+
+jobs:
+  check:
+    # Troy's tests launch a real Electron window and drive real navigations,
+    # so they run on each platform it ships on rather than on one and a hope.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run lint
+      - run: npm run typecheck
+
+      # Linux runners have no display, and an Electron window needs one.
+      - name: Test
+        if: runner.os != 'Linux'
+        run: npm test
+
+      - name: Test under xvfb
+        if: runner.os == 'Linux'
+        run: xvfb-run --auto-servernum npm test

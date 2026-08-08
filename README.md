@@ -16,11 +16,38 @@
 
 ---
 
-> **Status: in build.** The design is locked and approved. The code is not
-> written yet, there is nothing to install, and nothing in this README is a
-> command you can run today. Everything below describes designed behaviour so
-> the shape is reviewable before it exists. Watch the repo if you want the
-> first release.
+> **Status: the browser is real, the reading is still in build.** Troy opens
+> as a proper Chromium window with its own tabs, omnibox and agent panel, and
+> you can install it from the
+> [latest release](https://github.com/anishfyi/troy/releases/latest). What is
+> not built yet is the part this README is mostly about: cover, OCR and fuse.
+> Until that lands the agent panel reads a page from the DOM alone, and the
+> `troy read` examples below describe designed behaviour rather than a
+> recorded run.
+
+## Install
+
+| | |
+|---|---|
+| macOS, Apple silicon | [Troy-mac-arm64.dmg](https://github.com/anishfyi/troy/releases/latest/download/Troy-mac-arm64.dmg) |
+| macOS, Intel | [Troy-mac-x64.dmg](https://github.com/anishfyi/troy/releases/latest/download/Troy-mac-x64.dmg) |
+| Windows, installer | [Troy-windows-setup-x64.exe](https://github.com/anishfyi/troy/releases/latest/download/Troy-windows-setup-x64.exe) |
+| Windows, portable | [Troy-windows-portable-x64.exe](https://github.com/anishfyi/troy/releases/latest/download/Troy-windows-portable-x64.exe) |
+
+The builds are not signed yet, so the first launch takes one extra gesture:
+Control-click the app and choose Open on macOS, or choose More info then Run
+anyway on Windows. The macOS bundle is ad-hoc signed, which is what makes that
+gesture work at all on Apple silicon rather than failing with "damaged".
+
+From source:
+
+```bash
+npm install
+npm run browser     # open the window
+npm test            # 40 tests, 20 of them driving the real app
+npm run smoke       # start the packaged build and prove it opens
+npm run dist:mac    # or dist:win, output in release/
+```
 
 ## The problem
 

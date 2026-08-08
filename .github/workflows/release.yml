@@ -1,0 +1,90 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag to publish the build under, for example v0.1.0
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    # One native job per architecture. Cross-building the Intel Mac app from
+    # an Apple silicon runner would need Rosetta and prompt for it, and a
+    # build that waits on a dialog nobody can click just hangs.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            flag: --mac --arm64
+            artifact: mac-arm64
+          - os: macos-13
+            flag: --mac --x64
+            artifact: mac-x64
+          - os: windows-latest
+            flag: --win --x64
+            artifact: windows-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # Build the installers. Nothing is signed yet, so tell electron-builder
+      # not to go looking for a certificate and fail the build over it.
+      - name: Build installers
+        run: npx electron-builder ${{ matrix.flag }} --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Start the app that was just packaged. A release that does not open a
+      # window is worse than no release, and this is the only place that can
+      # be caught before people download it.
+      - name: Smoke test the packaged app
+        run: node scripts/smoke-packaged.mjs
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installers-${{ matrix.artifact }}
+          path: |
+            release/*.dmg
+            release/*.exe
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: installers
+          merge-multiple: true
+
+      - name: List what is about to be published
+        run: ls -lh installers
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          gh release create "$TAG" \
+            --title "Troy $TAG" \
+            --generate-notes \
+            --notes "Unsigned builds. On macOS, first launch needs Control-click then Open, because Troy is not notarised yet. On Windows, SmartScreen will ask you to choose More info then Run anyway." \
+            installers/* \
+          || gh release upload "$TAG" installers/* --clobber
