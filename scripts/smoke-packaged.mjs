@@ -11,6 +11,12 @@
 //
 // Exits non-zero with a reason if the app does not open a window, load its
 // new tab page, and navigate.
+//
+// The timeouts are generous because of one case: the Intel build started on
+// Apple silicon. Rosetta translates the whole Electron framework on first
+// launch, which takes well over a minute on a cold CI runner, and a smoke
+// test that normally finishes in five seconds loses nothing by waiting.
+// Override with TROY_SMOKE_TIMEOUT if you need to.
 
 import { _electron as electron } from 'playwright'
 import { existsSync } from 'node:fs'
@@ -19,6 +25,8 @@ import http from 'node:http'
 import { fileURLToPath } from 'node:url'
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..')
+
+const TIMEOUT = Number(process.env.TROY_SMOKE_TIMEOUT) || 240_000
 
 /** Where each platform's packaged executable lands under release/. */
 const CANDIDATES = {
@@ -68,10 +76,10 @@ console.log(`smoke: launching ${path.relative(root, executable)}`)
 const fixture = await serveOnce()
 let app
 try {
-  app = await electron.launch({ executablePath: executable, args: [], timeout: 60_000 })
-  const chrome = await app.firstWindow({ timeout: 60_000 })
+  app = await electron.launch({ executablePath: executable, args: [], timeout: TIMEOUT })
+  const chrome = await app.firstWindow({ timeout: TIMEOUT })
 
-  await chrome.waitForSelector('.tab', { timeout: 30_000 })
+  await chrome.waitForSelector('.tab', { timeout: TIMEOUT })
   const title = await chrome.title()
   if (title !== 'Troy') fail(`window title was "${title}", expected "Troy"`)
   console.log('smoke: window opened, chrome rendered')
