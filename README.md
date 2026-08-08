@@ -44,7 +44,7 @@ From source:
 ```bash
 npm install
 npm run browser     # open the window
-npm test            # 40 tests, 20 of them driving the real app
+npm test            # 47 tests, 27 of them driving the real app
 npm run smoke       # start the packaged build and prove it opens
 npm run dist:mac    # or dist:win, output in release/
 ```
