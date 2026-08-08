@@ -315,12 +315,14 @@ describe('failures', () => {
 
     try {
       await menu('reload')
+      // Wait for the title too, not just the address. A committed navigation
+      // does not mean page-title-updated has fired yet, and until then the
+      // strip shows the host as a placeholder.
       const snap = await until(
-        (s) => activeTab(s).url === target,
-        'the retry to reach the original address',
+        (s) => activeTab(s).url === target && activeTab(s).title.includes('recovered'),
+        'the retry to reach the original address and render it',
       )
       expect(activeTab(snap).failed).toBeNull()
-      expect(activeTab(snap).title).toContain('recovered')
     } finally {
       recovered.closeAllConnections()
       await new Promise<void>((resolve) => recovered.close(() => resolve()))
