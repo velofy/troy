@@ -25,6 +25,15 @@ jobs:
 
       - run: npm ci
 
+      # Fetch both browser binaries up front. npm ci does not download
+      # Electron's, and Playwright ships no browsers with the npm package, so
+      # without this the first test to need either downloads it mid-run.
+      - name: Fetch the Electron binary
+        run: node node_modules/electron/install.js
+
+      - name: Fetch Playwright's chromium
+        run: npx playwright install --with-deps chromium
+
       - run: npm run lint
       - run: npm run typecheck
 
