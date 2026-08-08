@@ -148,7 +148,7 @@ function hideNotice() {
 }
 
 window.troy.onTabs(renderTabs)
-window.troy.onNotice((reason) => showNotice(`Troy will not open that: ${reason}`))
+window.troy.onNotice(showNotice)
 window.troy.onFocusOmnibox(() => {
   omni.focus()
   omni.select()

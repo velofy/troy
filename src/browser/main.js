@@ -14,6 +14,9 @@ import path from 'node:path'
 import fs from 'node:fs'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { resolveOmnibox } from './omnibox.js'
+import { installSafetyNet } from './resilience.js'
+import { loadExtensions, summarise } from './extensions.js'
+import { describeEndpoint, endpointFile, writeEndpoint, clearEndpoint } from './endpoint.js'
 
 const dir = path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.join(dir, '..', '..')
@@ -77,6 +80,30 @@ if (cdpPort) {
   app.commandLine.appendSwitch('remote-allow-origins', 'http://127.0.0.1')
 }
 
+/**
+ * A tab is only safe to touch while its renderer exists. Once a webContents
+ * is destroyed, every getter on it throws, and a throw from an event handler
+ * in the main process ends the whole browser.
+ *
+ * @param {Tab | undefined} tab
+ * @returns {tab is Tab}
+ */
+function alive(tab) {
+  if (!tab) return false
+  try {
+    return !tab.view.webContents.isDestroyed()
+  } catch {
+    return false
+  }
+}
+
+/** Forget tabs whose renderer has gone, so nothing reaches for them again. */
+function pruneDeadTabs() {
+  for (const [id, tab] of tabs) {
+    if (!alive(tab)) tabs.delete(id)
+  }
+}
+
 /** @returns {number | null} */
 function readCdpPort() {
   const flag = process.argv.find((a) => a.startsWith('--cdp-port='))
@@ -91,7 +118,7 @@ function readCdpPort() {
 function layoutActive() {
   if (!win || win.isDestroyed()) return
   const tab = tabs.get(activeTabId)
-  if (!tab) return
+  if (!alive(tab)) return
   const { width, height } = win.getContentBounds()
   const right = panelOpen ? Math.min(PANEL_WIDTH, Math.max(0, width - 320)) : 0
   tab.view.setBounds({
@@ -112,6 +139,7 @@ function layoutActive() {
  */
 function displayUrl(tab) {
   if (tab.failed) return tab.failed.url
+  if (!alive(tab)) return ''
   const url = tab.view.webContents.getURL()
   return url.startsWith(NEW_TAB_URL) ? '' : url
 }
@@ -136,6 +164,9 @@ function syncChrome() {
 function sendChromeState() {
   syncQueued = false
   if (!win || win.isDestroyed() || win.webContents.isDestroyed()) return
+  // A tab can die between the state being queued and this running, and every
+  // getter on a dead webContents throws. Drop them first, then read.
+  pruneDeadTabs()
   const list = [...tabs.values()].map((tab) => ({
     id: tab.id,
     title: tabTitle(tab),
@@ -145,11 +176,12 @@ function sendChromeState() {
     active: tab.id === activeTabId,
   }))
   const active = tabs.get(activeTabId)
+  const usable = alive(active)
   win.webContents.send('tabs:changed', {
     tabs: list,
-    canGoBack: active ? active.view.webContents.navigationHistory.canGoBack() : false,
-    canGoForward: active ? active.view.webContents.navigationHistory.canGoForward() : false,
-    loading: active ? active.view.webContents.isLoading() : false,
+    canGoBack: usable ? active.view.webContents.navigationHistory.canGoBack() : false,
+    canGoForward: usable ? active.view.webContents.navigationHistory.canGoForward() : false,
+    loading: usable ? active.view.webContents.isLoading() : false,
     panelOpen,
   })
 }
@@ -160,6 +192,7 @@ function sendChromeState() {
  */
 function tabTitle(tab) {
   if (tab.failed) return 'Did not load'
+  if (!alive(tab)) return 'Closing'
   const url = tab.view.webContents.getURL()
   if (!url || url.startsWith(NEW_TAB_URL)) return 'New Tab'
   return tab.view.webContents.getTitle() || hostOf(url) || 'Untitled'
@@ -264,7 +297,7 @@ function createTab(url = NEW_TAB_URL) {
     if (query !== null) {
       event.preventDefault()
       const result = navigate(query, tab)
-      if (result.kind === 'refused') notify(result.reason ?? '')
+      if (result.kind === 'refused') notify(`Troy will not open that: ${result.reason ?? ''}`)
       return
     }
     if (!isNavigableUrl(target)) {
@@ -385,14 +418,15 @@ function newTabQuery(target) {
 }
 
 /**
- * Say something in the chrome. Used for refusals that did not come from the
- * address bar, which get their answer back from the ipc call instead.
+ * Say something in the chrome, as a whole sentence. Used for anything the
+ * user should see that did not come back from an ipc call they made, such as
+ * a refusal from the new tab page or the result of reloading extensions.
  *
- * @param {string} reason
+ * @param {string} message
  */
-function notify(reason) {
+function notify(message) {
   if (!win || win.isDestroyed() || win.webContents.isDestroyed()) return
-  win.webContents.send('chrome:notice', reason)
+  win.webContents.send('chrome:notice', message)
 }
 
 /**
@@ -406,13 +440,20 @@ function isNavigableUrl(url) {
 
 /** @param {number} id */
 function selectTab(id) {
+  pruneDeadTabs()
   const tab = tabs.get(id)
-  if (!tab) return
-  for (const [otherId, other] of tabs) other.view.setVisible(otherId === id)
+  if (!alive(tab)) return
+  for (const [otherId, other] of tabs) {
+    try {
+      other.view.setVisible(otherId === id)
+    } catch {
+      // A view torn down mid-switch; pruneDeadTabs will collect it.
+    }
+  }
   activeTabId = id
   layoutActive()
   syncChrome()
-  if (!tab.view.webContents.isDestroyed()) tab.view.webContents.focus()
+  tab.view.webContents.focus()
 }
 
 /**
@@ -665,6 +706,24 @@ function buildMenu() {
         { label: 'Zoom Out', accelerator: 'CmdOrCtrl+-', click: () => setZoom(null, -0.5) },
         { type: /** @type {const} */ ('separator') },
         {
+          id: 'open-extensions',
+          label: 'Extensions Folder',
+          click: () => {
+            fs.mkdirSync(extensionsDir(), { recursive: true })
+            shell.openPath(extensionsDir()).catch(() => {})
+          },
+        },
+        {
+          id: 'reload-extensions',
+          label: 'Reload Extensions',
+          click: () => {
+            void loadExtensions(session.defaultSession, extensionsDir()).then((results) => {
+              notify(summarise(results))
+            })
+          },
+        },
+        { type: /** @type {const} */ ('separator') },
+        {
           label: 'Toggle Developer Tools',
           accelerator: isMac ? 'Alt+Cmd+I' : 'Ctrl+Shift+I',
           click: () => activeContents()?.toggleDevTools(),
@@ -718,11 +777,26 @@ ipcMain.handle('agent:read', async () => {
       wc.debugger.attach('1.3')
       attachedHere = true
     }
+    // innerText is the right reading of a page, because it reflects what is
+    // laid out and painted rather than everything the DOM happens to hold.
+    // It is empty when nothing has been laid out at all, which happens on a
+    // tab that has never been shown, so fall back to textContent and say so
+    // rather than reporting a page as blank. The real pipeline decides
+    // visibility itself and will not need either.
     const { result } = await wc.debugger.sendCommand('Runtime.evaluate', {
-      expression: 'document.title + "\\n" + document.body.innerText.slice(0, 4000)',
+      expression: `(() => {
+        const body = document.body
+        if (!body) return JSON.stringify({ text: document.title, degraded: false })
+        const painted = (body.innerText || '').trim()
+        const raw = (body.textContent || '').trim()
+        const degraded = painted.length === 0 && raw.length > 0
+        const text = painted || raw
+        return JSON.stringify({ text: (document.title + '\\n' + text).slice(0, 4000), degraded })
+      })()`,
       returnByValue: true,
     })
-    return { url: wc.getURL(), text: String(result.value ?? '') }
+    const parsed = JSON.parse(String(result.value ?? '{}'))
+    return { url: wc.getURL(), text: String(parsed.text ?? ''), degraded: Boolean(parsed.degraded) }
   } catch (err) {
     return { error: errorMessage(err) }
   } finally {
@@ -748,11 +822,37 @@ function errorMessage(err) {
 
 // ------------------------------------------------------------------ start
 
-app.whenReady().then(() => {
+/** Where unpacked extensions live, alongside the profile. */
+function extensionsDir() {
+  return path.join(app.getPath('userData'), 'extensions')
+}
+
+app.whenReady().then(async () => {
+  // Before anything else. An uncaught error in a handler used to end the
+  // browser, tabs and all, and report itself only as "Troy quit unexpectedly".
+  installSafetyNet({
+    logFile: path.join(app.getPath('userData'), 'troy-errors.log'),
+    onError: (scope, err) => {
+      console.error(`[troy] ${scope}:`, err)
+      notify('Something went wrong inside Troy. It stayed open; the details are in troy-errors.log.')
+    },
+  })
+
   // An agent browser should not hand out the camera because a page asked.
   session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
     callback(permission === 'fullscreen' || permission === 'clipboard-sanitized-write')
   })
+
+  fs.mkdirSync(extensionsDir(), { recursive: true })
+  const loaded = await loadExtensions(session.defaultSession, extensionsDir())
+  if (loaded.length) console.log(`[troy] ${summarise(loaded)}`)
+
+  // Say where the agent bridge is, so nothing has to be copied by hand.
+  if (cdpPort) {
+    const file = endpointFile(app.getPath('userData'))
+    writeEndpoint(file, describeEndpoint({ port: cdpPort, pid: process.pid, version: app.getVersion() }))
+    app.on('will-quit', () => clearEndpoint(file))
+  }
 
   if (process.platform === 'darwin' && app.dock) {
     const icon = appIcon()

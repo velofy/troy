@@ -30,7 +30,9 @@ export type NavResult = {
   reason?: string
 }
 
-export type ReadResult = { url: string; text: string } | { error: string }
+export type ReadResult =
+  | { url: string; text: string; degraded: boolean }
+  | { error: string }
 
 export interface TroyBridge {
   newTab(url?: string): Promise<void>

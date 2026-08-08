@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { _electron as electron, type ElectronApplication, type Page } from 'playwright'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { createServer } from 'node:net'
 import type { AddressInfo } from 'node:net'
@@ -501,6 +501,57 @@ describe('failures', () => {
     await omnibox(`${fixtures.url}/article.html`)
     const snap = await until((s) => activeTab(s).failed === null, 'the failure to clear')
     expect(activeTab(snap).url).toBe(`${fixtures.url}/article.html`)
+  })
+})
+
+describe('staying open', () => {
+  // The reported crash: "Troy quit unexpectedly". An uncaught exception in
+  // the main process takes the whole browser with it, every tab and every
+  // signed-in session, and reports itself only as EXC_BREAKPOINT. One bad
+  // handler is not a reason to lose the window.
+  it('survives an uncaught exception in the main process', async () => {
+    await resetToOneTab()
+    const before = await snapshot()
+
+    await app.evaluate(() => {
+      setTimeout(() => {
+        throw new Error('a handler threw, as handlers eventually do')
+      }, 0)
+    })
+    await new Promise((resolve) => setTimeout(resolve, 600))
+
+    // Still here, still answering, still holding the same tab.
+    const after = await snapshot()
+    expect(after.tabs).toHaveLength(before.tabs.length)
+    expect(after.activeTabId).toBe(before.activeTabId)
+
+    // And still usable, not merely alive.
+    await omnibox(`${fixtures.url}/article.html`)
+    await until((s) => activeTab(s).url.endsWith('/article.html'), 'the browser to still navigate')
+  })
+
+  it('survives an unhandled promise rejection too', async () => {
+    await resetToOneTab()
+    await app.evaluate(() => {
+      void Promise.reject(new Error('nobody caught this'))
+    })
+    await new Promise((resolve) => setTimeout(resolve, 600))
+
+    await omnibox(`${fixtures.url}/popup.html`)
+    await until((s) => activeTab(s).url.endsWith('/popup.html'), 'the browser to still navigate')
+  })
+
+  it('writes what went wrong to a log rather than swallowing it', async () => {
+    await app.evaluate(() => {
+      setTimeout(() => {
+        throw new Error('recorded-for-the-log')
+      }, 0)
+    })
+    await new Promise((resolve) => setTimeout(resolve, 600))
+
+    const log = path.join(userDataDir, 'troy-errors.log')
+    const contents = await readFile(log, 'utf8').catch(() => '')
+    expect(contents).toContain('recorded-for-the-log')
   })
 })
 
