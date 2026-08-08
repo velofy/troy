@@ -72,6 +72,12 @@ html, body {
   cursor: default;
 }
 .tab .x:hover { background: #5f6368; }
+.tab .fav {
+  flex: none;
+  width: 15px; height: 15px;
+  border-radius: 3px;
+  object-fit: contain;
+}
 
 .newtab {
   -webkit-app-region: no-drag;
@@ -136,6 +142,29 @@ html, body {
   user-select: text;
 }
 #omni::placeholder { color: var(--dim); }
+
+.nav.loading svg { animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .nav.loading svg { animation: none; opacity: .5; }
+}
+
+/* ---------- refusal notice ---------- */
+
+/* Sits just under the toolbar, over the top of the page, because a refusal
+   the user cannot see is indistinguishable from an address bar that broke. */
+.notice {
+  position: fixed;
+  top: 88px; left: 0; right: 0;
+  margin: 0;
+  padding: 9px 14px;
+  background: #3a2b26;
+  border-bottom: 1px solid var(--accent);
+  color: var(--ink);
+  font-size: 12px;
+}
+.notice[hidden] { display: none; }
 
 /* ---------- agent panel ---------- */
 

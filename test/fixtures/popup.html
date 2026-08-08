@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Troy fixture: popup</title>
+</head>
+<body>
+<h1>Popup opener</h1>
+<button id="open">Open a window</button>
+<script>
+  document.getElementById('open').addEventListener('click', () => {
+    window.open('/article.html', '_blank', 'width=400,height=300')
+  })
+</script>
+</body>
+</html>

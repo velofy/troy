@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self' data:">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self' data: https: http:">
 <title>Troy</title>
 <link rel="stylesheet" href="chrome.css">
 </head>
@@ -10,7 +10,7 @@
   <div class="tabstrip" id="tabstrip">
     <div class="traffic-spacer"></div>
     <div class="tabs" id="tabs"></div>
-    <button class="newtab" id="newtab" title="New tab" aria-label="New tab">+</button>
+    <button class="newtab" id="newtab" title="New tab (Cmd T)" aria-label="New tab">+</button>
   </div>
 
   <div class="toolbar">
@@ -30,7 +30,7 @@
              aria-label="Search or enter address" placeholder="Search or enter address">
     </div>
 
-    <button class="agent" id="panel" title="Agent panel" aria-label="Toggle agent panel">
+    <button class="agent" id="panel" title="Agent panel (Cmd Shift A)" aria-label="Toggle agent panel">
       <svg viewBox="0 0 32 32" aria-hidden="true">
         <g fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
           <circle cx="16" cy="16" r="9.4"/>
@@ -40,6 +40,8 @@
       </svg>
     </button>
   </div>
+
+  <p class="notice" id="notice" role="status" hidden></p>
 
   <aside class="panel" id="agentpanel" hidden>
     <div class="panel-head">

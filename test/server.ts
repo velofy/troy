@@ -53,9 +53,21 @@ export function serveFixtures(): Promise<{ url: string; close: () => Promise<voi
   })
 }
 
+/** How long `/slow-fail` waits before dropping the connection. */
+export const SLOW_FAIL_MS = 400
+
 async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
   const requestUrl = req.url ?? '/'
   const pathname = decodeURIComponent(requestUrl.split('?')[0] ?? '/')
+
+  // Accepts the connection, then drops it without a response. A refused
+  // connection fails too fast to race against anything; this one fails late
+  // enough that a second navigation can be issued in between, which is the
+  // ordering that used to let a stale error page overwrite a good page.
+  if (pathname === '/slow-fail') {
+    setTimeout(() => res.socket?.destroy(), SLOW_FAIL_MS)
+    return
+  }
   const relative = pathname === '/' ? '/article.html' : pathname
   const filePath = path.join(FIXTURES_DIR, relative)
 
