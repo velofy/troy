@@ -116,8 +116,25 @@ function displayUrl(tab) {
   return url.startsWith(NEW_TAB_URL) ? '' : url
 }
 
-/** Tell the chrome what every tab looks like now. */
+let syncQueued = false
+
+/**
+ * Tell the chrome what every tab looks like now.
+ *
+ * Coalesced to once per turn of the loop. A single navigation fires
+ * did-start-loading, did-navigate, page-title-updated, page-favicon-updated
+ * and did-stop-loading in a burst, and sending five near-identical states
+ * across the process boundary makes the chrome do five times the work for
+ * one visible change.
+ */
 function syncChrome() {
+  if (syncQueued) return
+  syncQueued = true
+  setImmediate(sendChromeState)
+}
+
+function sendChromeState() {
+  syncQueued = false
   if (!win || win.isDestroyed() || win.webContents.isDestroyed()) return
   const list = [...tabs.values()].map((tab) => ({
     id: tab.id,
@@ -239,6 +256,17 @@ function createTab(url = NEW_TAB_URL) {
   // The same refusal the omnibox makes, applied to the page's own attempts
   // to move the top-level frame somewhere Troy will not go.
   wc.on('will-navigate', (event, target) => {
+    // The new tab page's search box is a plain GET form, so a submit arrives
+    // here as a navigation to newtab.html?q=... Cancel it and hand the text
+    // to the same resolver the address bar uses, so both boxes refuse the
+    // same things without the page needing any privilege of its own.
+    const query = newTabQuery(target)
+    if (query !== null) {
+      event.preventDefault()
+      const result = navigate(query, tab)
+      if (result.kind === 'refused') notify(result.reason ?? '')
+      return
+    }
     if (!isNavigableUrl(target)) {
       event.preventDefault()
       shell.openExternal(target).catch(() => {})
@@ -341,6 +369,33 @@ function humanise(description) {
 }
 
 /**
+ * The text submitted from the new tab page's search box, or null if this is
+ * not that navigation.
+ *
+ * @param {string} target
+ * @returns {string | null}
+ */
+function newTabQuery(target) {
+  if (!target.startsWith(`${NEW_TAB_URL}?`)) return null
+  try {
+    return new URL(target).searchParams.get('q') ?? ''
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * Say something in the chrome. Used for refusals that did not come from the
+ * address bar, which get their answer back from the ipc call instead.
+ *
+ * @param {string} reason
+ */
+function notify(reason) {
+  if (!win || win.isDestroyed() || win.webContents.isDestroyed()) return
+  win.webContents.send('chrome:notice', reason)
+}
+
+/**
  * @param {string} url
  * @returns {boolean}
  */
@@ -400,11 +455,12 @@ function activeContents() {
 
 /**
  * @param {string} input
+ * @param {Tab} [into] the tab to navigate, defaulting to the active one
  * @returns {{ kind: string, reason?: string }}
  */
-function navigate(input) {
+function navigate(input, into) {
   const result = resolveOmnibox(input)
-  const tab = tabs.get(activeTabId)
+  const tab = into ?? tabs.get(activeTabId)
   if (!tab) return { kind: 'empty' }
 
   if (result.kind === 'url' || result.kind === 'search') {

@@ -2,32 +2,12 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; img-src 'self' data:; form-action 'self'">
 <title>New Tab</title>
-<style>
-  html, body { height: 100%; margin: 0; }
-  body {
-    background: #202124;
-    color: #e8eaed;
-    font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-    display: grid;
-    place-items: center;
-    user-select: none;
-  }
-  .wrap { text-align: center; transform: translateY(-6vh); }
-  .mark { width: 64px; height: 64px; margin: 0 auto 18px; display: block; }
-  .name {
-    margin: 0 0 4px;
-    font-size: 15px;
-    letter-spacing: .32em;
-    text-transform: uppercase;
-    color: #e8eaed;
-  }
-  .tag { margin: 0; color: #9aa0a6; font-size: 12px; }
-</style>
+<link rel="stylesheet" href="newtab.css">
 </head>
 <body>
-  <div class="wrap">
+  <main class="wrap">
     <svg class="mark" viewBox="0 0 32 32" role="img" aria-label="Troy">
       <g fill="none" stroke="#d97757" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
         <path d="M2.4 10.6 V2.4 H10.6"/>
@@ -40,7 +20,30 @@
       <path d="M16 12 L19.46 18 H12.54 Z" fill="#d97757"/>
     </svg>
     <p class="name">troy</p>
-    <p class="tag">a browser an agent can actually read</p>
-  </div>
+
+    <!--
+      A plain GET form, with no script on this page at all.
+
+      Submitting navigates this tab to newtab.html?q=..., which the main
+      process catches in will-navigate, cancels, and hands to the same
+      resolver the address bar uses. So this box refuses javascript: and
+      friends for exactly the same reasons the address bar does, with one
+      copy of the rules, and the page itself gains no privilege: it has no
+      preload, no IPC, and nothing to reach for.
+    -->
+    <form class="search" method="get" action="newtab.html" role="search">
+      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+        <circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/>
+      </svg>
+      <input id="q" name="q" type="text" autofocus autocomplete="off" spellcheck="false"
+             aria-label="Search or enter address" placeholder="Search or enter address">
+    </form>
+
+    <p class="hints">
+      <span><kbd>Cmd</kbd><kbd>L</kbd> address bar</span>
+      <span><kbd>Cmd</kbd><kbd>T</kbd> new tab</span>
+      <span><kbd>Cmd</kbd><kbd>Shift</kbd><kbd>A</kbd> agent panel</span>
+    </p>
+  </main>
 </body>
 </html>

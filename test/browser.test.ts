@@ -12,8 +12,22 @@ import type { TroyBridge } from '../src/browser/bridge.js'
 
 // These tests run without the DOM lib, because everything else in the
 // program is Node and Electron main. The chrome page's globals exist only
-// inside the callbacks Playwright serializes into it.
+// inside the callbacks Playwright serializes into it, so they are declared
+// here to the extent those callbacks actually use them.
 declare const window: { troy: TroyBridge }
+
+type ChromeElement = {
+  getBoundingClientRect(): { width: number }
+  setAttribute(name: string, value: string): void
+  scrollWidth: number
+  clientWidth: number
+  hidden: boolean
+}
+
+declare const document: {
+  querySelector(selector: string): ChromeElement | null
+  querySelectorAll(selector: string): Iterable<ChromeElement> & ArrayLike<ChromeElement>
+}
 
 /**
  * The battle tests. These drive the real application: a real Electron main
@@ -199,6 +213,70 @@ describe('the omnibox', () => {
   })
 })
 
+describe('the new tab page', () => {
+  /** Type into the new tab page's own search box and submit it. */
+  async function searchFromNewTab(text: string): Promise<void> {
+    await app.evaluate(
+      ({ webContents }, query) => {
+        const page = webContents.getAllWebContents().find((w) => w.getURL().includes('newtab.html'))
+        if (!page) throw new Error('no new tab page open')
+        return page.executeJavaScript(
+          `(() => {
+            const box = document.getElementById('q')
+            box.value = ${JSON.stringify(query)}
+            box.form.requestSubmit()
+          })()`,
+          true,
+        )
+      },
+      text,
+    )
+  }
+
+  it('offers a search box that navigates the tab', async () => {
+    await resetToOneTab()
+    await menu('new-tab')
+    await until(
+      (s) => activeTab(s).url.includes('newtab.html'),
+      'a fresh new tab page',
+    )
+
+    await searchFromNewTab(`${fixtures.url}/article.html`)
+    const snap = await until(
+      (s) => activeTab(s).url === `${fixtures.url}/article.html`,
+      'the new tab search to navigate',
+    )
+    expect(activeTab(snap).failed).toBeNull()
+  })
+
+  it('searches a phrase typed into it rather than treating it as an address', async () => {
+    await resetToOneTab()
+    await menu('new-tab')
+    await until((s) => activeTab(s).url.includes('newtab.html'), 'a fresh new tab page')
+
+    await searchFromNewTab('how tall is everest')
+    const snap = await until(
+      (s) => activeTab(s).url.startsWith('https://duckduckgo.com/'),
+      'a search from the new tab page',
+    )
+    expect(activeTab(snap).url).toContain('how%20tall%20is%20everest')
+  })
+
+  // The new tab box must not be a second, weaker front door.
+  it('refuses javascript: from its search box, exactly like the address bar', async () => {
+    await resetToOneTab()
+    await menu('new-tab')
+    await until((s) => activeTab(s).url.includes('newtab.html'), 'a fresh new tab page')
+
+    await searchFromNewTab('javascript:alert(1)')
+    await chrome.waitForSelector('#notice:not([hidden])', { timeout: 5000 })
+    expect(await chrome.textContent('#notice')).toMatch(/will not open that/i)
+
+    const snap = await snapshot()
+    expect(activeTab(snap).url).toContain('newtab.html')
+  })
+})
+
 describe('tabs', () => {
   it('opens a new tab from the menu accelerator and makes it active', async () => {
     await resetToOneTab()
@@ -267,6 +345,62 @@ describe('tabs', () => {
     )
     expect(snap.tabs).toHaveLength(2)
     expect(await realWindows()).toBe(windowsBefore)
+  })
+})
+
+describe('the tab strip', () => {
+  const widths = () =>
+    chrome.evaluate(() =>
+      [...document.querySelectorAll('.tab')].map((t) => Math.round(t.getBoundingClientRect().width)),
+    )
+
+  it('gives a tab a roomy width and shrinks them evenly once the strip fills', async () => {
+    await resetToOneTab()
+    expect((await widths())[0]).toBe(268)
+
+    for (let i = 0; i < 13; i++) await menu('new-tab')
+    await until((s) => s.tabs.length === 14, 'a full strip')
+
+    const crowded = await widths()
+    expect(crowded).toHaveLength(14)
+    expect(crowded.every((w) => w < 268)).toBe(true)
+    expect(new Set(crowded).size).toBe(1) // shrunk evenly, not one runt at the end
+
+    // Crowding must shrink tabs, never push the strip past the window.
+    const overflows = await chrome.evaluate(() => {
+      const strip = document.querySelector('.tabstrip')!
+      return strip.scrollWidth > strip.clientWidth + 1
+    })
+    expect(overflows).toBe(false)
+  })
+
+  it('keeps the same element for a tab across updates, so favicons do not refetch', async () => {
+    await resetToOneTab()
+    await chrome.evaluate(() => {
+      document.querySelector('.tab')!.setAttribute('data-witness', 'original')
+    })
+
+    await omnibox(`${fixtures.url}/article.html`)
+    await until((s) => activeTab(s).title.includes('article'), 'a navigation with several state updates')
+
+    // A rebuild would have thrown this element away and with it the favicon
+    // image, which is what made tabs flicker while a page loaded.
+    expect(await chrome.getAttribute('.tab', 'data-witness')).toBe('original')
+  })
+
+  it('hides a favicon that fails to load instead of showing a broken image', async () => {
+    await resetToOneTab()
+    // The fixture server answers /favicon.ico with its 404 page, which an
+    // <img> cannot decode, so this is the no-icon case every plain site hits.
+    await omnibox(`${fixtures.url}/article.html`)
+    await until((s) => activeTab(s).title.includes('article'), 'the article')
+
+    const visible = await chrome.evaluate(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 1200))
+      const img = document.querySelector('.tab .fav')
+      return img ? !img.hidden : false
+    })
+    expect(visible).toBe(false)
   })
 })
 

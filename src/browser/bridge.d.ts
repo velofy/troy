@@ -43,5 +43,6 @@ export interface TroyBridge {
   togglePanel(): Promise<boolean>
   read(): Promise<ReadResult>
   onTabs(handler: (state: ChromeState) => void): () => void
+  onNotice(handler: (reason: string) => void): () => void
   onFocusOmnibox(handler: () => void): () => void
 }

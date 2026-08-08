@@ -26,6 +26,13 @@ contextBridge.exposeInMainWorld('troy', {
     ipcRenderer.on('tabs:changed', listener)
     return () => ipcRenderer.removeListener('tabs:changed', listener)
   },
+  /** @param {(reason: string) => void} handler */
+  onNotice: (handler) => {
+    /** @type {(event: unknown, reason: string) => void} */
+    const listener = (_event, reason) => handler(reason)
+    ipcRenderer.on('chrome:notice', listener)
+    return () => ipcRenderer.removeListener('chrome:notice', listener)
+  },
   /** @param {() => void} handler */
   onFocusOmnibox: (handler) => {
     const listener = () => handler()

@@ -22,41 +22,92 @@ const noticeEl = document.getElementById('notice')
 let editingOmni = false
 let noticeTimer = 0
 
-function renderTabs(state) {
-  tabsEl.textContent = ''
-  for (const tab of state.tabs) {
-    const el = document.createElement('div')
-    el.className = 'tab' + (tab.active ? ' active' : '')
-    el.title = tab.title
+// One entry per live tab, so a state update edits the strip in place.
+//
+// Emptying the strip and rebuilding it on every update looked simpler and was
+// wrong: state arrives several times per navigation, and each rebuild threw
+// away the favicon <img> and made the browser fetch it again, so tabs
+// flickered while a page loaded and the layout was recomputed for the whole
+// strip every time.
+const live = new Map()
 
-    if (tab.favicon) {
-      const img = document.createElement('img')
-      img.className = 'fav'
-      img.src = tab.favicon
-      img.alt = ''
-      img.addEventListener('error', () => img.remove())
-      el.append(img)
-    }
+function makeTab(id) {
+  const root = document.createElement('div')
+  root.className = 'tab'
 
-    const label = document.createElement('span')
-    label.className = 'label'
-    label.textContent = tab.title
-    label.addEventListener('click', () => window.troy.selectTab(tab.id))
+  const fav = document.createElement('img')
+  fav.className = 'fav'
+  fav.alt = ''
+  fav.hidden = true
 
-    const close = document.createElement('button')
-    close.className = 'x'
-    close.textContent = '×'
-    close.setAttribute('aria-label', `Close ${tab.title}`)
-    close.addEventListener('click', (e) => {
-      e.stopPropagation()
-      window.troy.closeTab(tab.id)
-    })
+  const entry = { root, fav, label: null, close: null, badFavicon: null }
 
-    el.append(label, close)
-    tabsEl.append(el)
+  // A site with no icon still reports /favicon.ico, and the server answers
+  // with its HTML 404 page, which an <img> cannot decode. Hiding it on error
+  // is not enough on its own: the next state update would set the same src
+  // and show the broken glyph again, so remember which one failed.
+  fav.addEventListener('error', () => {
+    entry.badFavicon = fav.getAttribute('src')
+    fav.hidden = true
+  })
 
-    if (tab.active && !editingOmni) omni.value = tab.url
+  const label = document.createElement('span')
+  label.className = 'label'
+  label.addEventListener('click', () => window.troy.selectTab(id))
+
+  const close = document.createElement('button')
+  close.className = 'x'
+  close.textContent = '×'
+  close.addEventListener('click', (e) => {
+    e.stopPropagation()
+    window.troy.closeTab(id)
+  })
+
+  root.append(fav, label, close)
+  entry.label = label
+  entry.close = close
+  return entry
+}
+
+function updateTab(entry, tab) {
+  if (entry.label.textContent !== tab.title) {
+    entry.label.textContent = tab.title
+    entry.root.title = tab.title
+    entry.close.setAttribute('aria-label', `Close ${tab.title}`)
   }
+  entry.root.classList.toggle('active', tab.active)
+
+  // Only touch src when it actually changed, or the image reloads.
+  if (tab.favicon && tab.favicon !== entry.badFavicon) {
+    if (entry.fav.getAttribute('src') !== tab.favicon) entry.fav.setAttribute('src', tab.favicon)
+    entry.fav.hidden = false
+  } else {
+    entry.fav.hidden = true
+    if (!tab.favicon) entry.fav.removeAttribute('src')
+  }
+}
+
+function renderTabs(state) {
+  state.tabs.forEach((tab, index) => {
+    let entry = live.get(tab.id)
+    if (!entry) {
+      entry = makeTab(tab.id)
+      live.set(tab.id, entry)
+    }
+    updateTab(entry, tab)
+    if (tabsEl.children[index] !== entry.root) {
+      tabsEl.insertBefore(entry.root, tabsEl.children[index] ?? null)
+    }
+    if (tab.active && !editingOmni) omni.value = tab.url
+  })
+
+  const open = new Set(state.tabs.map((tab) => tab.id))
+  for (const [id, entry] of live) {
+    if (open.has(id)) continue
+    entry.root.remove()
+    live.delete(id)
+  }
+
   backBtn.disabled = !state.canGoBack
   forwardBtn.disabled = !state.canGoForward
   reloadBtn.classList.toggle('loading', Boolean(state.loading))
@@ -80,6 +131,7 @@ function hideNotice() {
 }
 
 window.troy.onTabs(renderTabs)
+window.troy.onNotice((reason) => showNotice(`Troy will not open that: ${reason}`))
 window.troy.onFocusOmnibox(() => {
   omni.focus()
   omni.select()
