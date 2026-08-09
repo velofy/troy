@@ -27,6 +27,13 @@
 
 ## Install
 
+```sh
+brew install --cask anishfyi/tap/troy
+```
+
+The cask clears the quarantine flag after installing, so there is no
+Control-click dance. Or take the file directly:
+
 | | |
 |---|---|
 | macOS, Apple silicon | [Troy-mac-arm64.dmg](https://github.com/anishfyi/troy/releases/latest/download/Troy-mac-arm64.dmg) |
@@ -34,20 +41,27 @@
 | Windows, installer | [Troy-windows-setup-x64.exe](https://github.com/anishfyi/troy/releases/latest/download/Troy-windows-setup-x64.exe) |
 | Windows, portable | [Troy-windows-portable-x64.exe](https://github.com/anishfyi/troy/releases/latest/download/Troy-windows-portable-x64.exe) |
 
-The builds are not signed yet, so the first launch takes one extra gesture:
-Control-click the app and choose Open on macOS, or choose More info then Run
-anyway on Windows. The macOS bundle is ad-hoc signed, which is what makes that
-gesture work at all on Apple silicon rather than failing with "damaged".
+Downloaded by hand, the first launch takes one extra gesture: Control-click
+the app and choose Open on macOS, or More info then Run anyway on Windows.
+The macOS bundle is ad-hoc signed, which is what makes that gesture work at
+all on Apple silicon rather than failing with "damaged". Troy is not
+notarised and there are no plans to be; the Homebrew cask exists so that
+costs you nothing.
 
 From source:
 
 ```bash
 npm install
 npm run browser     # open the window
-npm test            # 47 tests, 27 of them driving the real app
+npm test            # 127 tests, 33 of them driving the real app
 npm run smoke       # start the packaged build and prove it opens
+npm run stress      # 16 busy tabs, fails if the chrome drops below 60fps
 npm run dist:mac    # or dist:win, output in release/
 ```
+
+`release/` is a build directory, not an install. Running the app from there
+means running whatever was last built, which is how a months-old binary ends
+up in Spotlight. `npm run dist:*` clears it first for that reason.
 
 ## The problem
 

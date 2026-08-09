@@ -17,10 +17,11 @@
     "icons": "node scripts/icons.mjs",
     "smoke": "node scripts/smoke-packaged.mjs",
     "stress": "node scripts/stress.mjs",
-    "pack": "electron-builder --dir",
-    "dist:mac": "electron-builder --mac",
-    "dist:win": "electron-builder --win",
-    "dist": "electron-builder --mac --win"
+    "clean": "rm -rf release",
+    "pack": "npm run clean && electron-builder --dir",
+    "dist:mac": "npm run clean && electron-builder --mac",
+    "dist:win": "npm run clean && electron-builder --win",
+    "dist": "npm run clean && electron-builder --mac --win"
   },
   "license": "MIT",
   "repository": {
