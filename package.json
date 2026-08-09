@@ -1,6 +1,6 @@
 {
   "name": "@anishfyi/troy",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "private": true,
   "type": "module",
   "description": "A browser an agent can actually read: DOM for structure, OCR for the pixels the DOM cannot explain.",
