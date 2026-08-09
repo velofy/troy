@@ -4,10 +4,12 @@
 
 <h1 align="center">troy</h1>
 
-<p align="center">A headless browser an agent can actually read.</p>
+<p align="center">A browser an agent can actually read and drive.</p>
 
 <p align="center">
   <a href="https://anishfyi.com/troy/">anishfyi.com/troy</a>
+  &nbsp;·&nbsp;
+  <a href="https://github.com/anishfyi/troy/releases/latest">download</a>
   &nbsp;·&nbsp;
   <a href="docs/superpowers/specs/2026-08-07-troy-design.md">the design</a>
   &nbsp;·&nbsp;
@@ -16,14 +18,18 @@
 
 ---
 
-> **Status: the browser is real, the reading is still in build.** Troy opens
-> as a proper Chromium window with its own tabs, omnibox and agent panel, and
-> you can install it from the
-> [latest release](https://github.com/anishfyi/troy/releases/latest). What is
-> not built yet is the part this README is mostly about: cover, OCR and fuse.
-> Until that lands the agent panel reads a page from the DOM alone, and the
-> `troy read` examples below describe designed behaviour rather than a
-> recorded run.
+Troy is a real Chromium browser with its own chrome, built so that an agent can
+attach to the window you are already signed into and work the page with you.
+
+Most browser automation starts a fresh, empty browser. The pages worth
+automating are behind a login, so the fresh browser is the wrong browser. Troy
+inverts that: you browse in it, and an agent joins the session you already have.
+
+> **Status.** The browser is real, installable, and tested on macOS, Windows and
+> Linux. The reading pipeline this project is named for, which fuses DOM
+> structure with OCR of the regions the DOM cannot explain, is **not built yet**.
+> Until it lands the agent panel reads a page from the DOM alone. See
+> [What is not built](#what-is-not-built).
 
 ## Install
 
@@ -31,8 +37,7 @@
 brew install --cask anishfyi/tap/troy
 ```
 
-The cask clears the quarantine flag after installing, so there is no
-Control-click dance. Or take the file directly:
+Or take a file directly:
 
 | | |
 |---|---|
@@ -41,125 +46,138 @@ Control-click dance. Or take the file directly:
 | Windows, installer | [Troy-windows-setup-x64.exe](https://github.com/anishfyi/troy/releases/latest/download/Troy-windows-setup-x64.exe) |
 | Windows, portable | [Troy-windows-portable-x64.exe](https://github.com/anishfyi/troy/releases/latest/download/Troy-windows-portable-x64.exe) |
 
-Downloaded by hand, the first launch takes one extra gesture: Control-click
-the app and choose Open on macOS, or More info then Run anyway on Windows.
-The macOS bundle is ad-hoc signed, which is what makes that gesture work at
-all on Apple silicon rather than failing with "damaged". Troy is not
-notarised and there are no plans to be; the Homebrew cask exists so that
-costs you nothing.
+Troy is ad-hoc signed but not notarised, and there are no plans to be. Downloaded
+by hand that costs you one gesture on first launch: Control-click then Open on
+macOS, or More info then Run anyway on Windows. The Homebrew cask clears the
+quarantine flag for you, so installing that way costs nothing. Ad-hoc signing is
+not cosmetic: without it, Apple silicon refuses to launch the app at all and
+reports it as damaged.
 
-From source:
+## Driving it from an agent
 
-```bash
+The debugging port is closed unless you ask for it, because an open one is
+unrestricted control of every tab you are signed into.
+
+```sh
+open -a Troy --args --cdp-port=9333     # or: npm run browser -- --cdp-port=9333
+```
+
+Troy then writes where it is, so nothing has to be copied between terminals:
+
+```sh
+cat "$HOME/Library/Application Support/Troy/agent-endpoint.json"
+# { "port": 9333, "httpEndpoint": "http://127.0.0.1:9333", ... }
+```
+
+Attach with anything that speaks CDP. This gives you the tabs already open, not
+a new browser:
+
+```js
+import { chromium } from 'playwright'
+
+const browser = await chromium.connectOverCDP('http://127.0.0.1:9333')
+const [context] = browser.contexts()
+const page = context.pages().find((p) => p.url().startsWith('http'))
+
+await page.goto('http://localhost:3000/checkout')
+await page.getByRole('button', { name: 'Continue' }).click()
+
+await browser.close()   // detaches; it does not close the user's browser
+```
+
+For Claude Code there is a skill in [`skills/troy`](skills/troy/SKILL.md)
+covering attach, console and network capture, and the rules about not closing
+tabs that are not yours.
+
+## What it does today
+
+**Refusals live in code.** `javascript:`, `data:`, `blob:`, `filesystem:` and the
+browser-internal schemes are refused by the address bar and by the new tab search
+box, from one copy of the rules. `javascript://x/%0aalert(document.cookie)` is the
+disguise a "does it look like a URL" check misses, and it is the reason this is a
+tested module rather than a habit. Pages cannot open uncontrolled popups;
+`window.open` becomes a tab. Camera, microphone, geolocation and notification
+requests are denied.
+
+**Failures are pages, not blankness.** A load that fails shows a real page that
+keeps the address you asked for, and reloading retries that address rather than
+the error page. A failure arriving after you have already navigated somewhere
+else is dropped instead of overwriting the page you asked for.
+
+**It stays open.** An uncaught exception in Electron's main process normally
+takes the whole browser with it, every tab and every signed-in session, and
+reports itself to macOS only as `EXC_BREAKPOINT`. Troy guards every read of a
+tab and keeps a net under itself, recording what happened to `troy-errors.log`.
+
+**No history unless you ask.** Nothing is recorded by default. The new tab page
+has a settings button that turns it on, and the shortcuts grid is filled in by
+you rather than by watching where you go.
+
+**Trackers blocked, honestly.** Third-party analytics and ad beacons are
+cancelled, and tracking parameters (`utm_*`, `gclid`, `fbclid`, and friends) are
+stripped from an address before the request is made. Search goes to Google and
+nothing is sent as you type, because Troy asks no suggestion service anything.
+None of that changes the fact that a Google search is seen by Google, and the
+settings panel says so rather than implying otherwise.
+
+**Extensions.** Unpacked Chrome extensions load from `<profile>/extensions/` at
+startup. No store, nothing fetched remotely, `allowFileAccess` off.
+
+**It is fast, and that is enforced.** `npm run stress` opens sixteen tabs each
+animating and streaming requests, then switches tabs, types and reloads while
+counting frames in the chrome. It fails the run below 60fps, if the 95th
+percentile frame misses budget, or if any frame stalls past 100ms.
+
+## What is not built
+
+The read pipeline, which is the thing the name is about:
+
+- **settle, extract, cover, ocr, fuse.** Take structure from the DOM and pixels
+  from OCR, deciding by itself which regions need which, so a plain article
+  costs zero OCR and a canvas dashboard gets its numbers read
+- `troy read <url>` as a CLI, markdown or `--json`
+- Apple Vision on macOS, Tesseract elsewhere, behind one interface
+- the verified action layer ported from `scripts/*.mjs` to TypeScript
+
+The [design document](docs/superpowers/specs/2026-08-07-troy-design.md) describes
+all of it in detail. Treat it as intent, not as documentation of behaviour that
+exists.
+
+Also deliberately absent for now: omnibox suggestions, bookmarks, find-in-page,
+context menus, tab reordering, and any browser engine other than Chromium.
+
+## Development
+
+```sh
 npm install
 npm run browser     # open the window
-npm test            # 127 tests, 33 of them driving the real app
+npm test            # 127 tests, 33 of them driving a real Electron process
+npm run lint
+npm run typecheck   # also type-checks the JavaScript, via checkJs
 npm run smoke       # start the packaged build and prove it opens
-npm run stress      # 16 busy tabs, fails if the chrome drops below 60fps
+npm run stress      # the 60fps gate
 npm run dist:mac    # or dist:win, output in release/
 ```
 
-`release/` is a build directory, not an install. Running the app from there
-means running whatever was last built, which is how a months-old binary ends
-up in Spotlight. `npm run dist:*` clears it first for that reason.
+CI runs the suite on macOS, Windows and Linux. That matrix is not ceremony: the
+Windows leg caught `'file://' + path.join()` producing backslash URLs, which made
+a new tab leak its own file path into the address bar on that platform only.
 
-## The problem
+The tests drive the real application rather than mocking it, and assert through
+two surfaces only: what a person can see in the chrome page, and a snapshot hook
+in the main process for the things a person cannot see directly, like which view
+is visible and where it sits.
 
-Point an agent at a web page and it gets two bad options.
-
-Dump the HTML and it drowns: a modest page is tens of thousands of tokens of
-wrappers, inline styles and tracking noise, and the words it wanted are somewhere
-inside. Take a screenshot instead and it can see the page but has lost every
-link, every form field and every selector, so it can read but not act.
-
-Both options also miss the same thing. Plenty of real text is never in the DOM at
-all: numbers painted into a `canvas` dashboard, text baked into an image, an
-embedded PDF, a cross-origin iframe. The DOM cannot tell you what those say. Only
-the pixels can.
-
-## What Troy does
-
-Troy returns one clean document per page by taking structure from the DOM and
-pixels from OCR, and working out by itself which parts of the page need which.
-
-The interesting stage is **cover**. Troy does not OCR everything, because that is
-slow and because OCR guesses would overwrite text the DOM already knows exactly.
-It screenshots, finds only the regions the DOM cannot explain, OCRs just those,
-and fuses them back by geometry.
-
-A plain article costs zero OCR. A canvas dashboard gets its numbers read.
-
-```
-# Q3 dashboard                          [dom]
-Revenue by region                       [dom]
-  <canvas>                              [ocr]
-    "APAC   41.2M   +18%"               [ocr]
-    "EMEA   28.7M    +4%"               [ocr]
-Export as CSV  (button, #export)        [dom]
-
-1 region OCR'd in 0.4s, apple-vision
-```
-
-Every line carries its bounding box and its source, so the agent can act on what
-it just read.
-
-## Design at a glance
-
-**Reading.** Settle the page, extract the DOM and accessibility tree with
-geometry, cover the gaps, OCR those crops, fuse into reading order. Markdown by
-default, `--json` when the agent intends to act.
-
-**OCR.** Apple Vision on macOS, local and free and markedly better than Tesseract
-on the small antialiased text the web is made of. Tesseract everywhere else.
-One interface, so the caller never picks. An opt-in `--deep` escalates a hard
-region to a vision model when the goal is comprehension of a chart rather than
-characters.
-
-**Acting.** Fill writes, blurs, reads back and fails on mismatch. Click is
-container-scoped and refuses ambiguous or unscoped repeated matches rather than
-guessing. State watches custom-control attributes, not just native `checked`.
-Navigation re-checks the host after redirects.
-
-**Refusals live in code, not in a prompt.** Submit controls, password fields and
-over-`maxlength` values are rejected by the library, so no amount of clever
-prompting talks Troy into pressing submit.
-
-**Hidden text is not page content.** Text that is present in the DOM but not
-painted (`display:none`, zero-size, transparent, clipped away) is extracted,
-marked invisible, and excluded from the output. Reporting scraper-poisoning text
-as if a human could see it would be a correctness bug.
-
-**Sessions.** Headless by default, so the first read needs no setup at all. A
-persistent logged-in profile is opt-in, for the pages worth reading that sit
-behind a login.
-
-## Planned shape
-
-```
-troy read <url>              the headline, markdown or --json
-troy launch                  open the persistent logged-in profile
-troy goto|fill|click|state   the verified action layer
-troy session ls|rm           manage profiles
-```
-
-## Milestones
-
-None of these are started.
-
-- [ ] **M1** Repo, TypeScript scaffold, session layer (headless and attach), CI
-- [ ] **M2** Extract and markdown render: `read` works on DOM-only pages
-- [ ] **M3** OCR engine interface, Apple Vision helper, Tesseract backend
-- [ ] **M4** Cover and fuse: the differentiator, against the fixture suite
-- [ ] **M5** Action layer ported and typed
-- [ ] **M6** `--deep`, docs, plugin, npm publish
-
-Out of scope for v1, deliberately: file upload, session recording, multi-step
-flow resume, browsers other than Chromium.
+`release/` is a build directory, not an install. Running the app from there means
+running whatever was last built, which is exactly how a months-old binary ends up
+in Spotlight; `npm run dist:*` clears it first.
 
 ## Name
 
-Troy, for the walls and the long patient siege, not for the horse. The mark is an
-aperture between two crop marks: the thing that sees the page.
+Troy, for the walls and the long patient siege, not for the horse. That reading
+points at malware, which is the wrong association for something whose whole job
+is to be honest about what a page contains. The mark is an aperture between two
+crop marks: the thing that sees the page.
 
 ## License
 
