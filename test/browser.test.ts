@@ -391,6 +391,20 @@ describe('the loading bar', () => {
     throw new Error('the loading bar never cleared')
   }
 
+  // The bug this exists for: the bar sat at top:88px, which is exactly where
+  // the page's WebContentsView begins. It rendered correctly and was
+  // composited underneath the page, so it was never once visible. Asserting
+  // the class said "on" passed the whole time.
+  it('sits inside the chrome, where the page view cannot cover it', async () => {
+    const box = await chrome.evaluate(() => {
+      const bar = document.querySelector('#progress')!.getBoundingClientRect()
+      return { top: bar.top, bottom: bar.top + bar.height, height: bar.height }
+    })
+    expect(box.height).toBeGreaterThan(0)
+    // 88 is CHROME_HEIGHT: everything below it belongs to the page view.
+    expect(box.bottom).toBeLessThanOrEqual(88)
+  })
+
   it('shows while a page is loading and clears once it lands', async () => {
     await resetToOneTab()
     await barSettles()
@@ -508,18 +522,22 @@ describe('the tab strip', () => {
     expect(overflows).toBe(false)
   })
 
-  it('centres the close icon in its button, both ways', async () => {
+  it('centres the close icon in its button, and draws it big enough to see', async () => {
     await resetToOneTab()
-    const offset = await chrome.evaluate(() => {
+    const geometry = await chrome.evaluate(() => {
       const button = document.querySelector('.tab .x')!.getBoundingClientRect()
       const icon = document.querySelector('.tab .x svg')!.getBoundingClientRect()
       return {
         vertical: Math.abs(icon.top + icon.height / 2 - (button.top + button.height / 2)),
         horizontal: Math.abs(icon.left + icon.width / 2 - (button.left + button.width / 2)),
+        ratio: icon.width / button.width,
       }
     })
-    expect(offset.vertical).toBeLessThan(0.5)
-    expect(offset.horizontal).toBeLessThan(0.5)
+    expect(geometry.vertical).toBeLessThan(0.5)
+    expect(geometry.horizontal).toBeLessThan(0.5)
+    // Centred but tiny still reads as broken. The cross should fill a good
+    // half of its button, the way every other browser draws one.
+    expect(geometry.ratio).toBeGreaterThan(0.5)
   })
 
   it('keeps the same element for a tab across updates, so favicons do not refetch', async () => {

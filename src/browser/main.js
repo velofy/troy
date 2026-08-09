@@ -176,6 +176,9 @@ function sendChromeState() {
     url: displayUrl(tab),
     favicon: tab.favicon,
     failed: Boolean(tab.failed),
+    // Per tab, not just the active one, so a background tab still working
+    // shows it in the strip rather than looking finished.
+    loading: alive(tab) ? tab.view.webContents.isLoading() : false,
     active: tab.id === activeTabId,
   }))
   const active = tabs.get(activeTabId)

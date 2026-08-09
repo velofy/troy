@@ -116,11 +116,11 @@ html, body {
   transition: background .12s ease, color .12s ease;
 }
 .tab .x svg {
-  width: 10px; height: 10px;
+  width: 12px; height: 12px;
   display: block;
   fill: none;
   stroke: currentColor;
-  stroke-width: 1.5;
+  stroke-width: 1.4;
   stroke-linecap: round;
 }
 .tab.active .x { color: var(--ink); }
@@ -135,6 +135,24 @@ html, body {
 }
 .tab .fav[hidden] { display: none; }
 .tab .label { flex: 1; }
+
+/* A tab that is loading spins where its icon goes, so a background tab still
+   working is visible without switching to it. Rotating a transform stays on
+   the compositor, so this costs no layout and no paint. */
+.tab .spin {
+  flex: none;
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(255, 255, 255, .22);
+  border-top-color: var(--accent);
+  animation: spin .7s linear infinite;
+}
+.tab .spin[hidden] { display: none; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .tab .spin { animation-duration: 2.4s; }
+}
 
 .newtab {
   -webkit-app-region: no-drag;
@@ -234,7 +252,12 @@ html, body {
    snaps to 100% when it lands. */
 .progress {
   position: fixed;
-  top: 88px; left: 0;
+  /* Inside the chrome, not below it. The page's WebContentsView is laid out
+     from y=88 down and composites above this page, so a bar at 88px renders
+     underneath it and is never seen. Sitting it on the toolbar's bottom two
+     pixels puts it on the seam, which is where it was meant to look like it
+     was anyway. */
+  top: 86px; left: 0;
   height: 2px;
   width: 100%;
   transform: scaleX(0);

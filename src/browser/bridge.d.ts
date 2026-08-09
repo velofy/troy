@@ -14,6 +14,7 @@ export type TabView = {
   url: string
   favicon: string | null
   failed: boolean
+  loading: boolean
   active: boolean
 }
 

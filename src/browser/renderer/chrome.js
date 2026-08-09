@@ -35,11 +35,14 @@ const SVG_NS = 'http://www.w3.org/2000/svg'
 
 function cross() {
   const svg = document.createElementNS(SVG_NS, 'svg')
-  svg.setAttribute('viewBox', '0 0 12 12')
+  // The cross fills its box rather than floating in the middle of a larger
+  // one. At the old proportions it drew a 4px mark inside a 20px button and
+  // read as a smudge rather than a close control.
+  svg.setAttribute('viewBox', '0 0 10 10')
   svg.setAttribute('aria-hidden', 'true')
   svg.setAttribute('focusable', 'false')
   const path = document.createElementNS(SVG_NS, 'path')
-  path.setAttribute('d', 'M3.6 3.6 L8.4 8.4 M8.4 3.6 L3.6 8.4')
+  path.setAttribute('d', 'M1.4 1.4 L8.6 8.6 M8.6 1.4 L1.4 8.6')
   svg.append(path)
   return svg
 }
@@ -94,7 +97,11 @@ function makeTab(id) {
   fav.alt = ''
   fav.hidden = true
 
-  const entry = { root, fav, label: null, close: null, badFavicon: null }
+  const spin = document.createElement('span')
+  spin.className = 'spin'
+  spin.hidden = true
+
+  const entry = { root, fav, spin, label: null, close: null, badFavicon: null }
 
   // A site with no icon still reports /favicon.ico, and the server answers
   // with its HTML 404 page, which an <img> cannot decode. Hiding it on error
@@ -122,7 +129,7 @@ function makeTab(id) {
     window.troy.closeTab(id)
   })
 
-  root.append(fav, label, close)
+  root.append(spin, fav, label, close)
   entry.label = label
   entry.close = close
   return entry
@@ -136,8 +143,12 @@ function updateTab(entry, tab) {
   }
   entry.root.classList.toggle('active', tab.active)
 
-  // Only touch src when it actually changed, or the image reloads.
-  if (tab.favicon && tab.favicon !== entry.badFavicon) {
+  // The spinner takes the icon's place while loading, so the tab does not
+  // change width when a page starts or finishes.
+  entry.spin.hidden = !tab.loading
+
+  const showFavicon = !tab.loading && tab.favicon && tab.favicon !== entry.badFavicon
+  if (showFavicon) {
     if (entry.fav.getAttribute('src') !== tab.favicon) entry.fav.setAttribute('src', tab.favicon)
     entry.fav.hidden = false
   } else {
