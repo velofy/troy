@@ -589,11 +589,17 @@ function saveWindowState() {
 
 function createWindow() {
   const state = readWindowState()
+  const isMac = process.platform === 'darwin'
   win = new BrowserWindow({
     ...state,
     minWidth: MIN_WIDTH,
     minHeight: MIN_HEIGHT,
-    backgroundColor: '#202124',
+    // On macOS the chrome is a vibrant surface: the system blurs whatever is
+    // behind the window and Troy tints it, which is why the background has
+    // to be clear rather than a colour. Everywhere else it stays a solid
+    // panel, because faking vibrancy with a flat translucent fill over an
+    // opaque window just looks washed out.
+    ...(isMac ? { vibrancy: 'header', backgroundColor: '#00000000' } : { backgroundColor: '#202124' }),
     title: 'Troy',
     icon: appIcon() ?? undefined,
     titleBarStyle: 'hiddenInset',
@@ -840,7 +846,7 @@ ipcMain.handle(
   newTabOnly((_e, /** @type {{key?: unknown, value?: unknown}} */ change) => {
     const key = String(change?.key ?? '')
     if (key !== 'rememberHistory' && key !== 'blockTrackers') return settings()
-    return writeSettings(settingsFile(app.getPath('userData')), { [key]: Boolean(change?.value) })
+    return updateSettings({ [key]: Boolean(change?.value) })
   }),
 )
 
@@ -917,14 +923,33 @@ function extensionsDir() {
   return path.join(app.getPath('userData'), 'extensions')
 }
 
+/** @type {import('./settings.js').Settings | null} */
+let settingsCache = null
+
 /**
- * Settings, read fresh rather than cached, so a change on the new tab page
- * takes effect on the next navigation instead of on the next launch.
+ * Settings, held in memory.
+ *
+ * This is read on every network request, because the tracker blocker asks
+ * whether it is enabled before deciding. Reading the file each time meant a
+ * synchronous disk read per subresource, so a page pulling two hundred
+ * requests did two hundred blocking reads on the main process and the whole
+ * window stuttered. Nothing else writes this file, so a cache invalidated on
+ * our own writes is exact.
  *
  * @returns {import('./settings.js').Settings}
  */
 function settings() {
-  return readSettings(settingsFile(app.getPath('userData')))
+  if (!settingsCache) settingsCache = readSettings(settingsFile(app.getPath('userData')))
+  return settingsCache
+}
+
+/**
+ * @param {Partial<import('./settings.js').Settings>} patch
+ * @returns {import('./settings.js').Settings}
+ */
+function updateSettings(patch) {
+  settingsCache = writeSettings(settingsFile(app.getPath('userData')), patch)
+  return settingsCache
 }
 
 app.whenReady().then(async () => {

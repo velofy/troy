@@ -16,6 +16,7 @@
     "browser": "electron src/browser/main.js",
     "icons": "node scripts/icons.mjs",
     "smoke": "node scripts/smoke-packaged.mjs",
+    "stress": "node scripts/stress.mjs",
     "pack": "electron-builder --dir",
     "dist:mac": "electron-builder --mac",
     "dist:win": "electron-builder --win",

@@ -4,21 +4,46 @@
 :root {
   --chrome: #202124;
   --strip: #17181a;
-  --tab: #35363a;
-  --tab-hover: #2b2c2f;
-  --field: #2f3033;
   --ink: #e8eaed;
-  --dim: #9aa0a6;
+  --dim: #b3b8bf;
   --line: #3c4043;
   --accent: #d97757;
+
+  /* Glass. Everything that sits on the vibrant surface is a tint of white
+     rather than its own grey, so the desktop behind the window shows
+     through consistently instead of each control inventing its own shade.
+     The blur itself is the window's, done by the compositor. */
+  --glass-strip: rgba(14, 15, 17, .78);
+  --glass-bar: rgba(24, 25, 28, .74);
+  --tab: rgba(255, 255, 255, .13);
+  --tab-hover: rgba(255, 255, 255, .06);
+  --field: rgba(255, 255, 255, .08);
+  --field-focus: rgba(255, 255, 255, .13);
+  --hairline: rgba(255, 255, 255, .09);
+  --control-hover: rgba(255, 255, 255, .11);
+  --control-active: rgba(255, 255, 255, .18);
 }
+
+/*
+  There is deliberately no backdrop-filter anywhere in this file.
+
+  It would cost a full-width GPU blur pass every frame the chrome repaints,
+  and it would buy nothing, because backdrop-filter can only blur what is
+  behind an element *within the same compositing surface*. The web page is a
+  separate WebContentsView, so the chrome cannot see it to blur it. The real
+  glass is the window's own vibrancy, which the system composites for free.
+
+  On a platform without vibrancy these tints land on the solid window colour
+  below and read as a normal dark chrome, which is the right fallback.
+*/
 
 * { box-sizing: border-box; }
 
 html, body {
   margin: 0;
   height: 100%;
-  background: var(--chrome);
+  /* Clear, so the window's vibrancy is what shows through the chrome. */
+  background: transparent;
   color: var(--ink);
   font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   overflow: hidden;
@@ -33,7 +58,7 @@ html, body {
   gap: 2px;
   height: 44px;
   padding: 6px 8px 0;
-  background: var(--strip);
+  background: var(--glass-strip);
   -webkit-app-region: drag;
 }
 .traffic-spacer { width: 72px; flex: none; }
@@ -59,26 +84,36 @@ html, body {
   font: inherit;
   cursor: default;
 }
+.tab { transition: background .12s ease; }
 .tab:hover { background: var(--tab-hover); }
-.tab.active { background: var(--tab); color: var(--ink); }
+/* The active tab is a raised pane of glass: a touch brighter than the strip,
+   with a hairline catching the light along its top edge. */
+.tab.active {
+  background: var(--tab);
+  color: var(--ink);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .10);
+}
 .tab .label {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* Grid centring plus a drawn cross, so the icon is on the middle of the
-   button on every machine. A text "×" is placed by font metrics, which is
-   why it always looked a pixel high. */
+/* A round hit target with the cross exactly on its centre. Grid centring
+   does the placing, and the icon is drawn rather than typed, because the
+   multiplication sign sits on the font's math axis and always looked a
+   pixel high inside the circle. */
 .tab .x {
   flex: none;
-  width: 18px; height: 18px;
+  width: 20px; height: 20px;
   display: grid;
   place-items: center;
   padding: 0;
-  border: 0; border-radius: 50%;
+  border: 0;
+  border-radius: 50%;
   background: transparent;
-  color: inherit;
+  color: var(--dim);
   cursor: default;
+  transition: background .12s ease, color .12s ease;
 }
 .tab .x svg {
   width: 10px; height: 10px;
@@ -88,7 +123,10 @@ html, body {
   stroke-width: 1.5;
   stroke-linecap: round;
 }
-.tab .x:hover { background: #5f6368; }
+.tab.active .x { color: var(--ink); }
+.tab .x:hover { background: var(--control-hover); color: var(--ink); }
+.tab .x:active { background: var(--control-active); }
+.tab .x:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .tab .fav {
   flex: none;
   width: 15px; height: 15px;
@@ -111,7 +149,10 @@ html, body {
   color: var(--dim);
   cursor: default;
 }
-.newtab:hover { background: var(--tab-hover); color: var(--ink); }
+.newtab { transition: background .12s ease, color .12s ease; }
+.newtab:hover { background: var(--control-hover); color: var(--ink); }
+.newtab:active { background: var(--control-active); }
+.newtab:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 /* ---------- toolbar ---------- */
 
@@ -121,7 +162,7 @@ html, body {
   gap: 4px;
   height: 44px;
   padding: 0 8px;
-  background: var(--chrome);
+  background: var(--glass-bar);
 }
 
 .nav, .agent {
@@ -133,8 +174,11 @@ html, body {
   color: var(--dim);
   cursor: default;
 }
-.nav:hover, .agent:hover { background: var(--tab-hover); color: var(--ink); }
-.nav:disabled { opacity: .35; }
+.nav, .agent { transition: background .12s ease, color .12s ease; }
+.nav:hover, .agent:hover { background: var(--control-hover); color: var(--ink); }
+.nav:active:not(:disabled), .agent:active { background: var(--control-active); }
+.nav:focus-visible, .agent:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.nav:disabled { opacity: .38; }
 .nav svg, .agent svg, .newtab svg {
   width: 16px; height: 16px;
   display: block;
@@ -158,7 +202,16 @@ html, body {
   border-radius: 16px;
   background: var(--field);
 }
-.omnibox:focus-within { background: #3c4043; box-shadow: 0 0 0 2px #8ab4f8 inset; }
+/* Troy's accent, not Chrome's blue. One hairline at rest so the field has an
+   edge against the glass, and the accent ring only once it has focus. */
+.omnibox {
+  box-shadow: inset 0 0 0 1px var(--hairline);
+  transition: background .12s ease, box-shadow .12s ease;
+}
+.omnibox:focus-within {
+  background: var(--field-focus);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
 .omni-icon { width: 15px; height: 15px; flex: none; fill: none; stroke: var(--dim); stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
 #omni {
   flex: 1;
