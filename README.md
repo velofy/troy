@@ -11,7 +11,9 @@
   &nbsp;·&nbsp;
   <a href="https://github.com/anishfyi/troy/releases/latest">download</a>
   &nbsp;·&nbsp;
-  <a href="docs/superpowers/specs/2026-08-07-troy-design.md">the design</a>
+  <a href="docs/PRD.md">PRD</a>
+  &nbsp;·&nbsp;
+  <a href="docs/DESIGN.md">design</a>
   &nbsp;·&nbsp;
   MIT
 </p>
@@ -139,19 +141,32 @@ The read pipeline, which is the thing the name is about:
 - Apple Vision on macOS, Tesseract elsewhere, behind one interface
 - the verified action layer ported from `scripts/*.mjs` to TypeScript
 
-The [design document](docs/superpowers/specs/2026-08-07-troy-design.md) describes
-all of it in detail. Treat it as intent, not as documentation of behaviour that
-exists.
+[`docs/DESIGN.md` §9](docs/DESIGN.md) describes the pipeline, and
+[the original spec](docs/superpowers/specs/2026-08-07-troy-design.md) has it in
+full. Treat both as intent, not as documentation of behaviour that exists.
 
 Also deliberately absent for now: omnibox suggestions, bookmarks, find-in-page,
 context menus, tab reordering, and any browser engine other than Chromium.
+
+One thing worth calling out because it is a live gap rather than a plan: the
+**Remember history** switch on the new tab page stores and toggles, but nothing
+reads it yet, so turning it on records nothing. See
+[`docs/PRD.md` §9](docs/PRD.md).
+
+## Documents
+
+- [**PRD**](docs/PRD.md). The problem, who it is for, requirements with their
+  real status, success measures, milestones, risks.
+- [**Design**](docs/DESIGN.md). Process model, components, the decisions and the
+  alternatives they beat, invariants and the tests that guard them, the security
+  and performance models.
 
 ## Development
 
 ```sh
 npm install
 npm run browser     # open the window
-npm test            # 127 tests, 33 of them driving a real Electron process
+npm test            # 127 tests, 36 of them driving a real Electron process
 npm run lint
 npm run typecheck   # also type-checks the JavaScript, via checkJs
 npm run smoke       # start the packaged build and prove it opens
