@@ -10,6 +10,8 @@
 // The refusal lives here, in code, rather than in a prompt or a code review
 // habit, so it holds for every caller including the agent bridge.
 
+import { stripTrackingParams } from './tracking.js'
+
 /**
  * @typedef {object} OmniResult
  * @property {'url' | 'search' | 'external' | 'refused' | 'empty'} kind
@@ -39,7 +41,17 @@ const REFUSED = new Map([
 /** Schemes that belong to another application, handed to the OS. */
 const EXTERNAL = new Set(['mailto', 'tel', 'sms', 'facetime', 'msteams', 'zoommtg'])
 
-const SEARCH = 'https://duckduckgo.com/?q='
+/**
+ * Where a phrase goes. Google by default, because that is what people mean
+ * by searching. Nothing is sent as you type: this URL is built once, when
+ * you press Enter, and no suggestion request is made before that.
+ */
+export const ENGINES = {
+  google: 'https://www.google.com/search?q=',
+  duckduckgo: 'https://duckduckgo.com/?q=',
+}
+
+const DEFAULT_ENGINE = ENGINES.google
 
 /**
  * A hostname worth trying as a URL: dot-separated labels ending in something
@@ -54,9 +66,11 @@ const LOCAL_HOST = /^(localhost|\d{1,3}(?:\.\d{1,3}){3}|\[[0-9a-f:]+\])$/i
  * Turn omnibox input into an instruction.
  *
  * @param {string} input what the user typed
+ * @param {{ search?: string }} [options] the search URL prefix to use
  * @returns {OmniResult}
  */
-export function resolveOmnibox(input) {
+export function resolveOmnibox(input, options = {}) {
+  const search = options.search ?? DEFAULT_ENGINE
   const text = String(input ?? '').trim()
   if (!text) return { kind: 'empty' }
 
@@ -69,7 +83,7 @@ export function resolveOmnibox(input) {
       if (scheme === 'about' && text.toLowerCase() !== 'about:blank') {
         return { kind: 'refused', reason: 'about: pages other than about:blank are not addressable' }
       }
-      return { kind: 'url', url: text }
+      return { kind: 'url', url: stripTrackingParams(text) }
     }
     // An unknown scheme with an authority ("ssh://host") is somebody else's
     // protocol; let the OS decide rather than searching for it.
@@ -84,9 +98,11 @@ export function resolveOmnibox(input) {
   if (LOCAL_HOST.test(host)) return { kind: 'url', url: `http://${text}` }
 
   // A space anywhere means it was a sentence, not an address.
-  if (!/\s/.test(text) && LIKELY_HOST.test(host)) return { kind: 'url', url: `https://${text}` }
+  if (!/\s/.test(text) && LIKELY_HOST.test(host)) {
+    return { kind: 'url', url: stripTrackingParams(`https://${text}`) }
+  }
 
-  return { kind: 'search', url: SEARCH + encodeURIComponent(text) }
+  return { kind: 'search', url: search + encodeURIComponent(text) }
 }
 
 /**

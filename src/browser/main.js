@@ -13,8 +13,11 @@ import { app, BrowserWindow, WebContentsView, ipcMain, shell, Menu, nativeImage,
 import path from 'node:path'
 import fs from 'node:fs'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { resolveOmnibox } from './omnibox.js'
+import { resolveOmnibox, ENGINES } from './omnibox.js'
 import { installSafetyNet } from './resilience.js'
+import { installBlocker } from './tracking.js'
+import { settingsFile, readSettings, writeSettings } from './settings.js'
+import { shortcutsFile, readShortcuts, addShortcut, removeShortcut } from './shortcuts.js'
 import { loadExtensions, summarise } from './extensions.js'
 import { describeEndpoint, endpointFile, writeEndpoint, clearEndpoint } from './endpoint.js'
 
@@ -219,7 +222,14 @@ function hostOf(url) {
 function createTab(url = NEW_TAB_URL) {
   if (!win || win.isDestroyed()) return 0
   const view = new WebContentsView({
-    webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      // Exposes nothing unless the document is Troy's own new tab page. See
+      // tab-preload.cjs for why that check is sound.
+      preload: path.join(dir, 'tab-preload.cjs'),
+    },
   })
   const id = nextTabId++
   /** @type {Tab} */
@@ -500,7 +510,8 @@ function activeContents() {
  * @returns {{ kind: string, reason?: string }}
  */
 function navigate(input, into) {
-  const result = resolveOmnibox(input)
+  const engine = ENGINES[/** @type {keyof typeof ENGINES} */ (settings().searchEngine)] ?? ENGINES.google
+  const result = resolveOmnibox(input, { search: engine })
   const tab = into ?? tabs.get(activeTabId)
   if (!tab) return { kind: 'empty' }
 
@@ -765,6 +776,85 @@ ipcMain.handle('nav:reload', reload)
 ipcMain.handle('nav:go', (_e, input) => navigate(String(input ?? '')))
 ipcMain.handle('panel:toggle', togglePanel)
 
+/**
+ * Is this call coming from Troy's own new tab page.
+ *
+ * Checked here rather than trusted from the renderer. A preload can only
+ * decide what to expose; the main process decides what to honour, and a page
+ * cannot lie about the URL of the frame it is calling from.
+ *
+ * @param {import('electron').IpcMainInvokeEvent} event
+ * @returns {boolean}
+ */
+function fromNewTab(event) {
+  const url = event.senderFrame?.url ?? event.sender.getURL()
+  return String(url).split('?')[0]?.split('#')[0] === NEW_TAB_URL
+}
+
+/**
+ * Wrap an ipc handler so it only answers Troy's own new tab page.
+ *
+ * @param {(event: import('electron').IpcMainInvokeEvent, ...args: any[]) => unknown} handler
+ * @returns {(event: import('electron').IpcMainInvokeEvent, ...args: any[]) => unknown}
+ */
+function newTabOnly(handler) {
+  return (event, ...args) => {
+    if (!fromNewTab(event)) throw new Error('this channel is for the new tab page')
+    return handler(event, ...args)
+  }
+}
+
+// The new tab page's surface, refused for every other page.
+ipcMain.handle(
+  'newtab:state',
+  newTabOnly(() => {
+    const dir = app.getPath('userData')
+    const current = settings()
+    return {
+      shortcuts: readShortcuts(shortcutsFile(dir)),
+      rememberHistory: current.rememberHistory,
+      blockTrackers: current.blockTrackers,
+    }
+  }),
+)
+
+ipcMain.handle(
+  'newtab:add',
+  newTabOnly((_e, /** @type {{url?: unknown, title?: unknown}} */ entry) =>
+    addShortcut(shortcutsFile(app.getPath('userData')), {
+      url: String(entry?.url ?? ''),
+      title: entry?.title ? String(entry.title) : undefined,
+    }),
+  ),
+)
+
+ipcMain.handle(
+  'newtab:remove',
+  newTabOnly((_e, /** @type {unknown} */ url) =>
+    removeShortcut(shortcutsFile(app.getPath('userData')), String(url ?? '')),
+  ),
+)
+
+ipcMain.handle(
+  'newtab:setting',
+  newTabOnly((_e, /** @type {{key?: unknown, value?: unknown}} */ change) => {
+    const key = String(change?.key ?? '')
+    if (key !== 'rememberHistory' && key !== 'blockTrackers') return settings()
+    return writeSettings(settingsFile(app.getPath('userData')), { [key]: Boolean(change?.value) })
+  }),
+)
+
+// A tile goes through the same resolver as the address bar, so a tile can
+// never open something the address bar would refuse.
+ipcMain.handle(
+  'newtab:open',
+  newTabOnly((_e, /** @type {unknown} */ url) => {
+    const result = navigate(String(url ?? ''))
+    if (result.kind === 'refused') notify(`Troy will not open that: ${result.reason ?? ''}`)
+    return result.kind
+  }),
+)
+
 // Reading the live tab. The engine lands here in the next step; today this
 // proves the CDP attach path the whole design rests on, using the same
 // protocol calls the Cdp port makes.
@@ -827,6 +917,16 @@ function extensionsDir() {
   return path.join(app.getPath('userData'), 'extensions')
 }
 
+/**
+ * Settings, read fresh rather than cached, so a change on the new tab page
+ * takes effect on the next navigation instead of on the next launch.
+ *
+ * @returns {import('./settings.js').Settings}
+ */
+function settings() {
+  return readSettings(settingsFile(app.getPath('userData')))
+}
+
 app.whenReady().then(async () => {
   // Before anything else. An uncaught error in a handler used to end the
   // browser, tabs and all, and report itself only as "Troy quit unexpectedly".
@@ -842,6 +942,10 @@ app.whenReady().then(async () => {
   session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
     callback(permission === 'fullscreen' || permission === 'clipboard-sanitized-write')
   })
+
+  // Cancel third-party analytics and ad beacons. The setting is read per
+  // request rather than at startup, so the toggle takes effect at once.
+  installBlocker(session.defaultSession, { enabled: () => settings().blockTrackers })
 
   fs.mkdirSync(extensionsDir(), { recursive: true })
   const loaded = await loadExtensions(session.defaultSession, extensionsDir())
@@ -884,6 +988,10 @@ if (process.env.TROY_TEST === '1') {
           url: tab.view.webContents.getURL(),
           displayUrl: displayUrl(tab),
           title: tabTitle(tab),
+          // What this tab was last asked to show, which is what a test wants
+          // when it cares that a navigation was requested rather than that
+          // some remote server answered.
+          pending: tab.pending,
           failed: tab.failed,
           visible: tab.view.getVisible(),
           bounds: tab.view.getBounds(),

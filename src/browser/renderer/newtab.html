@@ -2,11 +2,18 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; img-src 'self' data:; form-action 'self'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self' data: https:; form-action 'self'">
 <title>New Tab</title>
 <link rel="stylesheet" href="newtab.css">
 </head>
 <body>
+  <button class="settingsbtn" id="settingsbtn" title="Settings" aria-label="Settings" aria-expanded="false">
+    <svg viewBox="0 0 16 16" aria-hidden="true">
+      <circle cx="8" cy="8" r="2.3"/>
+      <path d="M8 1.6v1.7M8 12.7v1.7M14.4 8h-1.7M3.3 8H1.6M12.5 3.5l-1.2 1.2M4.7 11.3l-1.2 1.2M12.5 12.5l-1.2-1.2M4.7 4.7 3.5 3.5"/>
+    </svg>
+  </button>
+
   <main class="wrap">
     <svg class="mark" viewBox="0 0 32 32" role="img" aria-label="Troy">
       <g fill="none" stroke="#d97757" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
@@ -22,22 +29,20 @@
     <p class="name">troy</p>
 
     <!--
-      A plain GET form, with no script on this page at all.
-
-      Submitting navigates this tab to newtab.html?q=..., which the main
-      process catches in will-navigate, cancels, and hands to the same
-      resolver the address bar uses. So this box refuses javascript: and
-      friends for exactly the same reasons the address bar does, with one
-      copy of the rules, and the page itself gains no privilege: it has no
-      preload, no IPC, and nothing to reach for.
+      A plain GET form, so the search box works with no script at all.
+      Submitting navigates to newtab.html?q=..., which the main process
+      cancels in will-navigate and hands to the same resolver the address
+      bar uses. One copy of the refusal rules, and no privilege here.
     -->
     <form class="search" method="get" action="newtab.html" role="search">
-      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
-        <circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/>
+      <svg class="icon" viewBox="0 0 16 16" aria-hidden="true">
+        <circle cx="7.1" cy="7.1" r="4.3"/><path d="M13.4 13.4l-3.1-3.1"/>
       </svg>
       <input id="q" name="q" type="text" autofocus autocomplete="off" spellcheck="false"
-             aria-label="Search or enter address" placeholder="Search or enter address">
+             aria-label="Search or enter address" placeholder="Search Google or enter address">
     </form>
+
+    <div class="tiles" id="tiles" hidden></div>
 
     <p class="hints">
       <span><kbd>Cmd</kbd><kbd>L</kbd> address bar</span>
@@ -45,5 +50,46 @@
       <span><kbd>Cmd</kbd><kbd>Shift</kbd><kbd>A</kbd> agent panel</span>
     </p>
   </main>
+
+  <div class="panel" id="settings" hidden>
+    <h2>Settings</h2>
+
+    <label class="row">
+      <span>
+        <b>Remember history</b>
+        <small>Off. Troy keeps no record of the pages you open. Turn this on and it
+        starts a list, stored only on this machine.</small>
+      </span>
+      <input type="checkbox" id="rememberHistory">
+    </label>
+
+    <label class="row">
+      <span>
+        <b>Block trackers</b>
+        <small>Cancels third-party analytics and ad beacons, and strips tracking
+        parameters from links before they are opened.</small>
+      </span>
+      <input type="checkbox" id="blockTrackers">
+    </label>
+
+    <p class="caveat">
+      Search goes to Google, and nothing is sent as you type: the query leaves
+      this machine only when you press Enter. Blocking third-party trackers
+      does not change the fact that a Google search is seen by Google.
+    </p>
+  </div>
+
+  <div class="addbox" id="addbox" hidden>
+    <h2>Add shortcut</h2>
+    <label>Name<input id="addTitle" type="text" autocomplete="off" placeholder="Optional"></label>
+    <label>Address<input id="addUrl" type="text" autocomplete="off" placeholder="example.com"></label>
+    <p class="err" id="addErr" hidden></p>
+    <div class="actions">
+      <button type="button" id="addCancel" class="ghost">Cancel</button>
+      <button type="button" id="addSave" class="solid">Add</button>
+    </div>
+  </div>
+
+  <script src="newtab.js"></script>
 </body>
 </html>

@@ -56,6 +56,9 @@ export function serveFixtures(): Promise<{ url: string; close: () => Promise<voi
 /** How long `/slow-fail` waits before dropping the connection. */
 export const SLOW_FAIL_MS = 400
 
+/** How long `/slow-page` waits before answering. */
+export const SLOW_PAGE_MS = 900
+
 async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
   const requestUrl = req.url ?? '/'
   const pathname = decodeURIComponent(requestUrl.split('?')[0] ?? '/')
@@ -66,6 +69,16 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
   // ordering that used to let a stale error page overwrite a good page.
   if (pathname === '/slow-fail') {
     setTimeout(() => res.socket?.destroy(), SLOW_FAIL_MS)
+    return
+  }
+
+  // Succeeds, but slowly enough that a test can observe the loading state
+  // rather than racing a load that finishes in the same millisecond.
+  if (pathname === '/slow-page') {
+    setTimeout(() => {
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
+      res.end('<!doctype html><title>Troy fixture: slow page</title><h1>Arrived</h1>')
+    }, SLOW_PAGE_MS)
     return
   }
   const relative = pathname === '/' ? '/article.html' : pathname

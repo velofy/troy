@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { resolveOmnibox } from '../src/browser/omnibox.js'
+import { resolveOmnibox, ENGINES } from '../src/browser/omnibox.js'
 
 describe('resolveOmnibox', () => {
   it('says nothing to do for empty input', () => {
@@ -32,10 +32,28 @@ describe('resolveOmnibox', () => {
     expect(resolveOmnibox('127.0.0.1:8080')).toEqual({ kind: 'url', url: 'http://127.0.0.1:8080' })
   })
 
-  it('searches anything that reads like a sentence', () => {
+  it('searches a sentence with google, and only once you press enter', () => {
     const result = resolveOmnibox('how tall is everest')
     expect(result.kind).toBe('search')
-    expect(result.url).toBe('https://duckduckgo.com/?q=how%20tall%20is%20everest')
+    expect(result.url).toBe('https://www.google.com/search?q=how%20tall%20is%20everest')
+  })
+
+  it('can be pointed at another engine', () => {
+    expect(resolveOmnibox('everest', { search: ENGINES.duckduckgo }).url).toBe(
+      'https://duckduckgo.com/?q=everest',
+    )
+  })
+
+  // Removed before the request is made, not after it has been logged.
+  it('strips tracking parameters from an address before navigating', () => {
+    expect(resolveOmnibox('https://example.com/post?utm_source=news&id=7')).toEqual({
+      kind: 'url',
+      url: 'https://example.com/post?id=7',
+    })
+    expect(resolveOmnibox('example.com/sale?gclid=abc')).toEqual({
+      kind: 'url',
+      url: 'https://example.com/sale',
+    })
   })
 
   it('searches a path rather than inventing a host from it', () => {

@@ -39,9 +39,50 @@ function cross() {
   svg.setAttribute('aria-hidden', 'true')
   svg.setAttribute('focusable', 'false')
   const path = document.createElementNS(SVG_NS, 'path')
-  path.setAttribute('d', 'M3.4 3.4 L8.6 8.6 M8.6 3.4 L3.4 8.6')
+  path.setAttribute('d', 'M3.6 3.6 L8.4 8.4 M8.4 3.6 L3.6 8.4')
   svg.append(path)
   return svg
+}
+
+// The loading bar. Kept here rather than derived from state on every update,
+// because the whole effect depends on when each step happens.
+const progressEl = document.getElementById('progress')
+let progressValue = 0
+let progressTimer = 0
+let progressFade = 0
+let loadingNow = false
+
+function paintProgress() {
+  progressEl.style.transform = `scaleX(${progressValue})`
+}
+
+function startProgress() {
+  clearTimeout(progressFade)
+  clearInterval(progressTimer)
+  progressEl.classList.remove('done')
+  progressEl.classList.add('on')
+  // Straight to 30%. A bar that starts at zero feels slower than the page is.
+  progressValue = 0.3
+  paintProgress()
+  progressTimer = setInterval(() => {
+    // Ease toward 90 and never reach it, so it keeps moving without ever
+    // claiming to be finished before the page is.
+    progressValue += (0.9 - progressValue) * 0.09
+    paintProgress()
+  }, 120)
+}
+
+function finishProgress() {
+  clearInterval(progressTimer)
+  progressTimer = 0
+  progressEl.classList.add('done')
+  progressValue = 1
+  paintProgress()
+  progressFade = setTimeout(() => {
+    progressEl.classList.remove('on')
+    progressValue = 0
+    paintProgress()
+  }, 220)
 }
 
 function makeTab(id) {
@@ -75,6 +116,7 @@ function makeTab(id) {
   const close = document.createElement('button')
   close.className = 'x'
   close.append(cross())
+  close.title = 'Close tab'
   close.addEventListener('click', (e) => {
     e.stopPropagation()
     window.troy.closeTab(id)
@@ -127,9 +169,17 @@ function renderTabs(state) {
 
   backBtn.disabled = !state.canGoBack
   forwardBtn.disabled = !state.canGoForward
-  reloadBtn.classList.toggle('loading', Boolean(state.loading))
   panelEl.hidden = !state.panelOpen
   panelBtn.classList.toggle('on', state.panelOpen)
+
+  // Only on the edges. Re-running the animation on every state update would
+  // restart the bar several times during one navigation.
+  const loading = Boolean(state.loading)
+  if (loading !== loadingNow) {
+    loadingNow = loading
+    if (loading) startProgress()
+    else finishProgress()
+  }
 }
 
 /** A refusal is worth a sentence. Silence would read as a broken address bar. */

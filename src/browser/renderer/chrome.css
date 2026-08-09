@@ -109,7 +109,6 @@ html, body {
   border: 0; border-radius: 50%;
   background: transparent;
   color: var(--dim);
-  font-size: 18px; line-height: 1;
   cursor: default;
 }
 .newtab:hover { background: var(--tab-hover); color: var(--ink); }
@@ -136,8 +135,16 @@ html, body {
 }
 .nav:hover, .agent:hover { background: var(--tab-hover); color: var(--ink); }
 .nav:disabled { opacity: .35; }
-.nav svg, .agent svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-.agent svg { width: 19px; height: 19px; }
+.nav svg, .agent svg, .newtab svg {
+  width: 16px; height: 16px;
+  display: block;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.agent svg { width: 18px; height: 18px; stroke-width: 2; }
 .agent.on { color: var(--accent); }
 
 .omnibox {
@@ -152,7 +159,7 @@ html, body {
   background: var(--field);
 }
 .omnibox:focus-within { background: #3c4043; box-shadow: 0 0 0 2px #8ab4f8 inset; }
-.omni-icon { width: 15px; height: 15px; flex: none; fill: none; stroke: var(--dim); stroke-width: 2; stroke-linecap: round; }
+.omni-icon { width: 15px; height: 15px; flex: none; fill: none; stroke: var(--dim); stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
 #omni {
   flex: 1;
   min-width: 0;
@@ -165,11 +172,31 @@ html, body {
 }
 #omni::placeholder { color: var(--dim); }
 
-.nav.loading svg { animation: spin 1s linear infinite; }
-@keyframes spin { to { transform: rotate(360deg); } }
+/* ---------- loading ---------- */
+
+/* A spinning reload icon tells you the browser is busy. This tells you the
+   page is arriving, which is the thing you actually care about. It jumps
+   straight to 30% because progress that starts at zero and crawls reads as
+   slow even when it is not, then eases toward 90% while the page loads and
+   snaps to 100% when it lands. */
+.progress {
+  position: fixed;
+  top: 88px; left: 0;
+  height: 2px;
+  width: 100%;
+  transform: scaleX(0);
+  transform-origin: 0 50%;
+  background: var(--accent);
+  opacity: 0;
+  pointer-events: none;
+  z-index: 5;
+  transition: transform .18s ease-out, opacity .18s ease-out;
+}
+.progress.on { opacity: 1; }
+.progress.done { transition: transform .12s ease-out, opacity .3s ease-in .12s; }
 
 @media (prefers-reduced-motion: reduce) {
-  .nav.loading svg { animation: none; opacity: .5; }
+  .progress { transition: opacity .1s linear; }
 }
 
 /* ---------- refusal notice ---------- */

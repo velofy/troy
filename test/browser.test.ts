@@ -7,7 +7,7 @@ import type { AddressInfo } from 'node:net'
 import http from 'node:http'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { serveFixtures, SLOW_FAIL_MS } from './server.js'
+import { serveFixtures, SLOW_FAIL_MS, SLOW_PAGE_MS } from './server.js'
 import type { TroyBridge } from '../src/browser/bridge.js'
 
 // These tests run without the DOM lib, because everything else in the
@@ -22,6 +22,7 @@ type ChromeElement = {
   scrollWidth: number
   clientWidth: number
   hidden: boolean
+  className: string
 }
 
 declare const document: {
@@ -47,6 +48,7 @@ type TabInfo = {
   url: string
   displayUrl: string
   title: string
+  pending: string | null
   failed: { url: string; reason: string } | null
   visible: boolean
   bounds: { x: number; y: number; width: number; height: number }
@@ -203,13 +205,17 @@ describe('the omnibox', () => {
     expect(activeTab(snap).url).toBe(`${fixtures.url}/article.html`)
   })
 
-  it('searches a phrase rather than treating it as an address', async () => {
+  // Asserts the search was issued, not that Google answered. Reaching the
+  // public internet would make the suite depend on the network and on a
+  // third party being up, neither of which is what this test is about.
+  it('issues a google search for a phrase rather than treating it as an address', async () => {
+    await resetToOneTab()
     await omnibox('how tall is everest')
     const snap = await until(
-      (s) => activeTab(s).url.startsWith('https://duckduckgo.com/'),
-      'a search to be issued',
+      (s) => (activeTab(s).pending ?? '').startsWith('https://www.google.com/search'),
+      'a google search to be issued',
     )
-    expect(activeTab(snap).url).toContain('how%20tall%20is%20everest')
+    expect(activeTab(snap).pending).toContain('how%20tall%20is%20everest')
   })
 })
 
@@ -256,10 +262,10 @@ describe('the new tab page', () => {
 
     await searchFromNewTab('how tall is everest')
     const snap = await until(
-      (s) => activeTab(s).url.startsWith('https://duckduckgo.com/'),
-      'a search from the new tab page',
+      (s) => (activeTab(s).pending ?? '').startsWith('https://www.google.com/search'),
+      'a google search from the new tab page',
     )
-    expect(activeTab(snap).url).toContain('how%20tall%20is%20everest')
+    expect(activeTab(snap).pending).toContain('how%20tall%20is%20everest')
   })
 
   // The new tab box must not be a second, weaker front door.
@@ -274,6 +280,134 @@ describe('the new tab page', () => {
 
     const snap = await snapshot()
     expect(activeTab(snap).url).toContain('newtab.html')
+  })
+})
+
+describe('the new tab bridge', () => {
+  /** Run script in whichever tab is showing the given URL fragment. */
+  function inTab(fragment: string, code: string): Promise<unknown> {
+    return app.evaluate(
+      ({ webContents }, [needle, source]) => {
+        const page = webContents.getAllWebContents().find((w) => w.getURL().includes(needle))
+        if (!page) throw new Error(`no tab showing ${needle}`)
+        return page.executeJavaScript(source, true)
+      },
+      [fragment, code] as [string, string],
+    )
+  }
+
+  /**
+   * The same, for script that navigates the tab.
+   *
+   * executeJavaScript resolves from the page it ran in, so awaiting a call
+   * that navigates away waits for a reply that can never arrive. Awaiting it
+   * turned a fast suite into a fifteen minute one.
+   */
+  function inTabNoWait(fragment: string, code: string): Promise<void> {
+    return app.evaluate(
+      ({ webContents }, [needle, source]) => {
+        const page = webContents.getAllWebContents().find((w) => w.getURL().includes(needle))
+        if (!page) throw new Error(`no tab showing ${needle}`)
+        void page.executeJavaScript(source, true).catch(() => undefined)
+      },
+      [fragment, code] as [string, string],
+    )
+  }
+
+  it('gives the new tab page its bridge', async () => {
+    await resetToOneTab()
+    await menu('new-tab')
+    await until((s) => activeTab(s).url.includes('newtab.html'), 'a new tab page')
+    expect(await inTab('newtab.html', 'typeof window.troyNewTab')).toBe('object')
+  })
+
+  // The preload is attached to every tab, so this is the property that
+  // matters: an ordinary web page must not get the object at all.
+  it('gives an ordinary web page nothing', async () => {
+    await resetToOneTab()
+    await omnibox(`${fixtures.url}/article.html`)
+    await until((s) => activeTab(s).url.endsWith('/article.html'), 'the article')
+    expect(await inTab('/article.html', 'typeof window.troyNewTab')).toBe('undefined')
+  })
+
+  it('stores a shortcut, shows it as a tile, and opens it through the same rules', async () => {
+    await resetToOneTab()
+    await menu('new-tab')
+    await until((s) => activeTab(s).url.includes('newtab.html'), 'a new tab page')
+
+    await inTab(
+      'newtab.html',
+      `window.troyNewTab.addShortcut(${JSON.stringify(`${fixtures.url}/article.html`)}, 'Fixture')`,
+    )
+    await menu('reload')
+
+    // Poll: the tiles render once the bridge answers.
+    const deadline = Date.now() + 10_000
+    let labels: string[] = []
+    while (Date.now() < deadline) {
+      labels = (await inTab(
+        'newtab.html',
+        `[...document.querySelectorAll('.tile .face .label')].map(n => n.textContent)`,
+      ).catch(() => [])) as string[]
+      if (labels.includes('Fixture')) break
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    }
+    expect(labels).toContain('Fixture')
+    expect(labels).toContain('Add shortcut')
+
+    await inTabNoWait('newtab.html', `document.querySelector('.tile .face').click()`)
+    await until((s) => activeTab(s).url.endsWith('/article.html'), 'the tile to open')
+  })
+
+  it('refuses a tile that would run script, the same as the address bar', async () => {
+    await resetToOneTab()
+    await menu('new-tab')
+    await until((s) => activeTab(s).url.includes('newtab.html'), 'a new tab page')
+
+    const stored = (await inTab(
+      'newtab.html',
+      `window.troyNewTab.addShortcut('javascript:alert(1)', 'Bad')`,
+    )) as Array<{ url: string }>
+    expect(stored.every((s) => !s.url.startsWith('javascript:'))).toBe(true)
+  })
+})
+
+describe('the loading bar', () => {
+  // Split on whitespace rather than using includes: the finished state adds
+  // the class "done", and "done" contains "on".
+  const progressOn = () =>
+    chrome.evaluate(() => {
+      const bar = document.querySelector('#progress')
+      return bar ? bar.className.split(/\s+/).includes('on') : false
+    })
+
+  /** Wait until the bar has settled, so a previous navigation is not read. */
+  async function barSettles(): Promise<void> {
+    const deadline = Date.now() + 5000
+    while (Date.now() < deadline) {
+      if (!(await progressOn())) return
+      await new Promise((resolve) => setTimeout(resolve, 80))
+    }
+    throw new Error('the loading bar never cleared')
+  }
+
+  it('shows while a page is loading and clears once it lands', async () => {
+    await resetToOneTab()
+    await barSettles()
+
+    await omnibox(`${fixtures.url}/slow-page`)
+
+    // The bar should be up well before the page arrives.
+    const deadline = Date.now() + SLOW_PAGE_MS
+    let sawBar = false
+    while (Date.now() < deadline && !sawBar) {
+      sawBar = await progressOn()
+      if (!sawBar) await new Promise((resolve) => setTimeout(resolve, 40))
+    }
+    expect(sawBar, 'the bar should appear while the page is still loading').toBe(true)
+
+    await until((s) => activeTab(s).url.endsWith('/slow-page'), 'the slow page to arrive')
+    await barSettles()
   })
 })
 
