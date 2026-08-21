@@ -97,6 +97,12 @@ describe('shouldBlockRequest', () => {
   it('treats an unknown initiator as third party, the safer reading', () => {
     expect(shouldBlockRequest('https://www.google-analytics.com/collect', undefined)).toBe(true)
   })
+
+  it('blocks a tracker even when the initiator is a file page', () => {
+    expect(
+      shouldBlockRequest('https://www.google-analytics.com/collect', 'file:///tmp/page.html'),
+    ).toBe(true)
+  })
 })
 
 describe('installBlocker', () => {

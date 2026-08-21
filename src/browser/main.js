@@ -20,6 +20,7 @@ import { settingsFile, readSettings, writeSettings } from './settings.js'
 import { shortcutsFile, readShortcuts, addShortcut, removeShortcut } from './shortcuts.js'
 import { loadExtensions, summarise } from './extensions.js'
 import { describeEndpoint, endpointFile, writeEndpoint, clearEndpoint } from './endpoint.js'
+import { historyFile, recordVisit, clearHistory } from './history.js'
 
 const dir = path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.join(dir, '..', '..')
@@ -248,6 +249,12 @@ function createTab(url = NEW_TAB_URL) {
   }
 
   wc.on('did-navigate', (_event, navigatedTo) => {
+    // Chromium lands here after a blocked location.href assignment. Go back
+    // rather than leaving the tab on an empty placeholder page.
+    if (navigatedTo === 'about:blank#blocked' && wc.navigationHistory.canGoBack()) {
+      wc.navigationHistory.goBack()
+      return
+    }
     if (!navigatedTo.startsWith(ERROR_PAGE)) {
       tab.failed = null
       tab.favicon = null
@@ -256,6 +263,7 @@ function createTab(url = NEW_TAB_URL) {
     // for some earlier address is out of date by definition.
     tab.pending = navigatedTo
     syncChrome()
+    maybeRecordHistory(tab, navigatedTo)
   })
 
   // A redirect changes what "the address we asked for" means, so the
@@ -264,8 +272,15 @@ function createTab(url = NEW_TAB_URL) {
   wc.on('did-redirect-navigation', (_details, redirectedTo, _isInPlace, isMainFrame) => {
     if (isMainFrame) tab.pending = redirectedTo
   })
-  wc.on('did-navigate-in-page', (_event, _navigatedTo, isMainFrame) => {
-    if (isMainFrame) syncChrome()
+  wc.on('did-navigate-in-page', (_event, navigatedTo, isMainFrame) => {
+    if (isMainFrame) {
+      tab.pending = navigatedTo
+      syncChrome()
+    }
+  })
+
+  wc.on('did-stop-loading', () => {
+    maybeRecordHistory(tab)
   })
 
   wc.on('page-favicon-updated', (_event, icons) => {
@@ -448,7 +463,11 @@ function notify(message) {
  */
 function isNavigableUrl(url) {
   const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(url)?.[1]?.toLowerCase()
-  return scheme === 'http' || scheme === 'https' || scheme === 'file' || scheme === 'about'
+  if (scheme === 'http' || scheme === 'https' || scheme === 'file') return true
+  // Same rule as the omnibox: about:blank is a blank canvas, everything
+  // else is browser internals a page must not steer you toward.
+  if (scheme === 'about') return url.toLowerCase() === 'about:blank'
+  return false
 }
 
 /** @param {number} id */
@@ -483,8 +502,12 @@ function closeTab(id) {
   const index = order.indexOf(id)
 
   tabs.delete(id)
-  win.contentView.removeChildView(tab.view)
-  if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close()
+  try {
+    win.contentView.removeChildView(tab.view)
+  } catch {
+    // The view may already be gone; pruneDeadTabs will forget the tab.
+  }
+  if (alive(tab)) tab.view.webContents.close()
 
   if (activeTabId !== id) {
     syncChrome()
@@ -501,7 +524,7 @@ function closeTab(id) {
 /** @returns {import('electron').WebContents | null} */
 function activeContents() {
   const tab = tabs.get(activeTabId)
-  if (!tab || tab.view.webContents.isDestroyed()) return null
+  if (!alive(tab)) return null
   return tab.view.webContents
 }
 
@@ -864,9 +887,9 @@ ipcMain.handle(
   }),
 )
 
-// Reading the live tab. The engine lands here in the next step; today this
-// proves the CDP attach path the whole design rests on, using the same
-// protocol calls the Cdp port makes.
+// Reading the live tab. Returns structured page facts the agent panel and
+// bridge can use before the full read pipeline lands. Attaches CDP briefly,
+// the same way the Cdp port does, and always detaches so DevTools stay usable.
 ipcMain.handle('agent:read', async () => {
   const wc = activeContents()
   if (!wc) return { error: 'no active tab' }
@@ -876,26 +899,41 @@ ipcMain.handle('agent:read', async () => {
       wc.debugger.attach('1.3')
       attachedHere = true
     }
-    // innerText is the right reading of a page, because it reflects what is
-    // laid out and painted rather than everything the DOM happens to hold.
-    // It is empty when nothing has been laid out at all, which happens on a
-    // tab that has never been shown, so fall back to textContent and say so
-    // rather than reporting a page as blank. The real pipeline decides
-    // visibility itself and will not need either.
     const { result } = await wc.debugger.sendCommand('Runtime.evaluate', {
       expression: `(() => {
         const body = document.body
-        if (!body) return JSON.stringify({ text: document.title, degraded: false })
-        const painted = (body.innerText || '').trim()
-        const raw = (body.textContent || '').trim()
+        const painted = body ? (body.innerText || '').trim() : ''
+        const raw = body ? (body.textContent || '').trim() : ''
         const degraded = painted.length === 0 && raw.length > 0
         const text = painted || raw
-        return JSON.stringify({ text: (document.title + '\\n' + text).slice(0, 4000), degraded })
+        const links = body ? body.querySelectorAll('a[href]').length : 0
+        const images = body ? body.querySelectorAll('img').length : 0
+        const headings = body ? body.querySelectorAll('h1,h2,h3,h4,h5,h6').length : 0
+        return JSON.stringify({
+          title: document.title || '',
+          readyState: document.readyState || '',
+          characterCount: text.length,
+          linkCount: links,
+          imageCount: images,
+          headingCount: headings,
+          textPreview: text.slice(0, 4000),
+          degraded,
+        })
       })()`,
       returnByValue: true,
     })
     const parsed = JSON.parse(String(result.value ?? '{}'))
-    return { url: wc.getURL(), text: String(parsed.text ?? ''), degraded: Boolean(parsed.degraded) }
+    return {
+      url: wc.getURL(),
+      title: String(parsed.title ?? wc.getTitle() ?? ''),
+      readyState: String(parsed.readyState ?? ''),
+      characterCount: Number(parsed.characterCount ?? 0),
+      linkCount: Number(parsed.linkCount ?? 0),
+      imageCount: Number(parsed.imageCount ?? 0),
+      headingCount: Number(parsed.headingCount ?? 0),
+      textPreview: String(parsed.textPreview ?? ''),
+      degraded: Boolean(parsed.degraded),
+    }
   } catch (err) {
     return { error: errorMessage(err) }
   } finally {
@@ -951,8 +989,27 @@ function settings() {
  * @returns {import('./settings.js').Settings}
  */
 function updateSettings(patch) {
+  const before = settings()
   settingsCache = writeSettings(settingsFile(app.getPath('userData')), patch)
+  if (before.rememberHistory && !settingsCache.rememberHistory) {
+    clearHistory(historyFile(app.getPath('userData')))
+  }
   return settingsCache
+}
+
+/**
+ * Record a finished load when the user asked Troy to remember where they went.
+ *
+ * @param {Tab} tab
+ * @param {string} [urlOverride]
+ */
+function maybeRecordHistory(tab, urlOverride) {
+  if (!settings().rememberHistory || !alive(tab) || tab.failed) return
+  const wc = tab.view.webContents
+  const url = urlOverride ?? wc.getURL()
+  if (!url.startsWith('http://') && !url.startsWith('https://')) return
+  if (url.startsWith(NEW_TAB_URL) || url.startsWith(ERROR_PAGE)) return
+  recordVisit(historyFile(app.getPath('userData')), { url, title: wc.getTitle() || hostOf(url) })
 }
 
 app.whenReady().then(async () => {

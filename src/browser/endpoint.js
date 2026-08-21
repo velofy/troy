@@ -61,7 +61,12 @@ export function describeEndpoint({ port, pid, version, now = new Date() }) {
  */
 export function writeEndpoint(file, endpoint) {
   fs.mkdirSync(path.dirname(file), { recursive: true })
-  fs.writeFileSync(file, `${JSON.stringify(endpoint, null, 2)}\n`)
+  const body = `${JSON.stringify(endpoint, null, 2)}\n`
+  // Write to a pid-suffixed temp file and rename into place so a reader
+  // never sees a half-written endpoint while Troy is starting or restarting.
+  const tmp = `${file}.${process.pid}.tmp`
+  fs.writeFileSync(tmp, body)
+  fs.renameSync(tmp, file)
 }
 
 /**

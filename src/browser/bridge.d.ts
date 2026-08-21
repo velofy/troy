@@ -32,7 +32,17 @@ export type NavResult = {
 }
 
 export type ReadResult =
-  | { url: string; text: string; degraded: boolean }
+  | {
+      url: string
+      title: string
+      readyState: string
+      characterCount: number
+      linkCount: number
+      imageCount: number
+      headingCount: number
+      textPreview: string
+      degraded: boolean
+    }
   | { error: string }
 
 export interface TroyBridge {

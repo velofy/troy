@@ -205,6 +205,21 @@ describe('the omnibox', () => {
     expect(activeTab(snap).url).toBe(`${fixtures.url}/article.html`)
   })
 
+  it('refuses about:config from a page navigation the same way the omnibox would', async () => {
+    await resetToOneTab()
+    await omnibox(`${fixtures.url}/article.html`)
+    await until((s) => activeTab(s).url.endsWith('/article.html'), 'the article')
+
+    await app.evaluate(({ webContents }, target) => {
+      const page = webContents.getAllWebContents().find((w) => w.getURL() === target)
+      return page?.executeJavaScript(`location.href = 'about:config'`, true)
+    }, `${fixtures.url}/article.html`)
+
+    await new Promise((resolve) => setTimeout(resolve, 400))
+    const snap = await snapshot()
+    expect(activeTab(snap).url).toBe(`${fixtures.url}/article.html`)
+  })
+
   // Asserts the search was issued, not that Google answered. Reaching the
   // public internet would make the suite depend on the network and on a
   // third party being up, neither of which is what this test is about.
@@ -730,11 +745,20 @@ describe('the agent panel', () => {
 
     const result = (await chrome.evaluate(() => window.troy.read())) as {
       url?: string
-      text?: string
+      title?: string
+      readyState?: string
+      characterCount?: number
+      linkCount?: number
+      textPreview?: string
       error?: string
     }
     expect(result.error).toBeUndefined()
-    expect(result.text).toContain('Vellichor Migration')
+    expect(result.url).toBe(`${fixtures.url}/article.html`)
+    expect(result.title).toContain('article')
+    expect(result.readyState).toBe('complete')
+    expect(result.characterCount).toBeGreaterThan(0)
+    expect(result.linkCount).toBeGreaterThan(0)
+    expect(result.textPreview).toContain('Vellichor Migration')
 
     // A debugger left attached locks DevTools out of that tab permanently.
     const stillAttached = await app.evaluate(({ webContents }, target) => {
@@ -758,5 +782,63 @@ describe('history', () => {
 
     await menu('forward')
     await until((s) => activeTab(s).url.endsWith('/popup.html'), 'going forward')
+  })
+
+  it('records visits when rememberHistory is on and clears them when it is turned off', async () => {
+    await resetToOneTab()
+    await menu('new-tab')
+    await until((s) => activeTab(s).url.includes('newtab.html'), 'a new tab page')
+
+    await app.evaluate(
+      ({ webContents }, enabled) => {
+        const page = webContents.getAllWebContents().find((w) => w.getURL().includes('newtab.html'))
+        if (!page) throw new Error('no new tab page open')
+        return page.executeJavaScript(
+          `window.troyNewTab.setSetting('rememberHistory', ${JSON.stringify(enabled)})`,
+          true,
+        )
+      },
+      true,
+    )
+
+    await omnibox(`${fixtures.url}/article.html`)
+    await until((s) => activeTab(s).url.endsWith('/article.html'), 'the article')
+
+    const { existsSync } = await import('node:fs')
+    const historyPath = `${userDataDir}/history.json`
+    const deadline = Date.now() + 15_000
+    while (Date.now() < deadline && !existsSync(historyPath)) {
+      await new Promise((resolve) => setTimeout(resolve, 60))
+    }
+    expect(existsSync(historyPath)).toBe(true)
+
+    const raw = await (await import('node:fs/promises')).readFile(historyPath, 'utf8')
+    const entries = JSON.parse(raw) as Array<{ url: string }>
+    expect(entries.some((entry) => entry.url === `${fixtures.url}/article.html`)).toBe(true)
+
+    await menu('new-tab')
+    await until((s) => activeTab(s).url.includes('newtab.html'), 'a fresh new tab page to turn history off')
+    await app.evaluate(({ webContents }) => {
+      const page = webContents.getAllWebContents().find((w) => w.getURL().includes('newtab.html'))
+      return page?.executeJavaScript(`window.troyNewTab.setSetting('rememberHistory', false)`, true)
+    })
+
+    expect(existsSync(historyPath)).toBe(false)
+  })
+
+  it('does not record visits while rememberHistory stays off', async () => {
+    await resetToOneTab()
+    await menu('new-tab')
+    await until((s) => activeTab(s).url.includes('newtab.html'), 'a new tab page')
+    await app.evaluate(({ webContents }) => {
+      const page = webContents.getAllWebContents().find((w) => w.getURL().includes('newtab.html'))
+      return page?.executeJavaScript(`window.troyNewTab.setSetting('rememberHistory', false)`, true)
+    })
+
+    await omnibox(`${fixtures.url}/article.html`)
+    await until((s) => activeTab(s).url.endsWith('/article.html'), 'the article')
+
+    const { existsSync } = await import('node:fs')
+    expect(existsSync(`${userDataDir}/history.json`)).toBe(false)
   })
 })
