@@ -206,7 +206,33 @@ body {
   line-height: 1.6;
 }
 
-.addbox { top: 52px; }
+/* The add dialog is a modal, not a dropdown: it centres on the page it is
+   adding to, with a backdrop that catches stray clicks. Anchoring it to the
+   settings gear put it half under the agent panel and on the far side of the
+   window from the tile that opened it. */
+.backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, .45);
+  z-index: 2;
+}
+.backdrop[hidden] { display: none; }
+
+.addbox {
+  position: fixed;
+  top: 44%;
+  right: auto;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(340px, calc(100vw - 32px));
+  padding: 16px 18px;
+  border: 1px solid #3c4043;
+  border-radius: 12px;
+  background: #26272a;
+  text-align: left;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .45);
+  z-index: 3;
+}
 .addbox label { display: block; margin-bottom: 10px; color: #9aa0a6; font-size: 11.5px; }
 .addbox input {
   display: block;

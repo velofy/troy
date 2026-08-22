@@ -9,9 +9,24 @@ const tilesEl = document.getElementById('tiles')
 const settingsBtn = document.getElementById('settingsbtn')
 const settingsEl = document.getElementById('settings')
 const addBox = document.getElementById('addbox')
+const backdrop = document.getElementById('backdrop')
 const addUrl = document.getElementById('addUrl')
 const addTitle = document.getElementById('addTitle')
 const addErr = document.getElementById('addErr')
+
+function closeAddBox() {
+  addBox.hidden = true
+  backdrop.hidden = true
+}
+
+function openAddBox() {
+  addErr.hidden = true
+  addUrl.value = ''
+  addTitle.value = ''
+  backdrop.hidden = false
+  addBox.hidden = false
+  addUrl.focus()
+}
 
 const SVG_NS = 'http://www.w3.org/2000/svg'
 
@@ -103,13 +118,7 @@ function makeAddTile() {
   label.className = 'label'
   label.textContent = 'Add shortcut'
   open.append(badge, label)
-  open.addEventListener('click', () => {
-    addErr.hidden = true
-    addUrl.value = ''
-    addTitle.value = ''
-    addBox.hidden = false
-    addUrl.focus()
-  })
+  open.addEventListener('click', openAddBox)
 
   tile.append(open)
   return tile
@@ -135,7 +144,7 @@ async function save() {
     addErr.hidden = false
     return
   }
-  addBox.hidden = true
+  closeAddBox()
   renderTiles(shortcuts)
 }
 
@@ -163,13 +172,14 @@ async function start() {
   }
 
   document.getElementById('addSave').addEventListener('click', save)
-  document.getElementById('addCancel').addEventListener('click', () => {
-    addBox.hidden = true
-  })
-  addUrl.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') save()
-    if (e.key === 'Escape') addBox.hidden = true
-  })
+  document.getElementById('addCancel').addEventListener('click', closeAddBox)
+  backdrop.addEventListener('click', closeAddBox)
+  for (const input of [addUrl, addTitle]) {
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') save()
+      if (e.key === 'Escape') closeAddBox()
+    })
+  }
 }
 
 start()
