@@ -345,45 +345,31 @@ describe('the new tab bridge', () => {
     expect(await inTab('/article.html', 'typeof window.troyNewTab')).toBe('undefined')
   })
 
-  it('stores a shortcut, shows it as a tile, and opens it through the same rules', async () => {
+  // Shortcuts were removed outright: the add dialog was broken for weeks and
+  // a grid nobody can populate is worse than no grid. These two properties
+  // survive the removal: the new tab page has no tile bridge left to call,
+  // and nothing it might still reference can store or open a scripted URL.
+  it('leaves the new tab page without a shortcut bridge', async () => {
     await resetToOneTab()
     await menu('new-tab')
     await until((s) => activeTab(s).url.includes('newtab.html'), 'a new tab page')
 
-    await inTab(
-      'newtab.html',
-      `window.troyNewTab.addShortcut(${JSON.stringify(`${fixtures.url}/article.html`)}, 'Fixture')`,
-    )
-    await menu('reload')
-
-    // Poll: the tiles render once the bridge answers.
+    // Poll: the bridge object appears once the tab's preload has run.
     const deadline = Date.now() + 10_000
-    let labels: string[] = []
+    let surface: Record<string, string> = {}
     while (Date.now() < deadline) {
-      labels = (await inTab(
+      surface = (await inTab(
         'newtab.html',
-        `[...document.querySelectorAll('.tile .face .label')].map(n => n.textContent)`,
-      ).catch(() => [])) as string[]
-      if (labels.includes('Fixture')) break
+        `({ addShortcut: typeof window.troyNewTab.addShortcut, removeShortcut: typeof window.troyNewTab.removeShortcut, openTile: typeof window.troyNewTab.openTile })`,
+      )) as Record<string, string>
+      if (Object.keys(surface).length > 0) break
       await new Promise((resolve) => setTimeout(resolve, 100))
     }
-    expect(labels).toContain('Fixture')
-    expect(labels).toContain('Add shortcut')
+    expect(Object.values(surface).every((t) => t === 'undefined')).toBe(true)
 
-    await inTabNoWait('newtab.html', `document.querySelector('.tile .face').click()`)
-    await until((s) => activeTab(s).url.endsWith('/article.html'), 'the tile to open')
-  })
-
-  it('refuses a tile that would run script, the same as the address bar', async () => {
-    await resetToOneTab()
-    await menu('new-tab')
-    await until((s) => activeTab(s).url.includes('newtab.html'), 'a new tab page')
-
-    const stored = (await inTab(
-      'newtab.html',
-      `window.troyNewTab.addShortcut('javascript:alert(1)', 'Bad')`,
-    )) as Array<{ url: string }>
-    expect(stored.every((s) => !s.url.startsWith('javascript:'))).toBe(true)
+    await inTabNoWait('newtab.html', `document.querySelector('.tile .face')?.click()`)
+    const still = (await snapshot()).tabs.find((t) => t.url.includes('newtab.html'))
+    expect(still).toBeTruthy()
   })
 })
 

@@ -9,7 +9,8 @@
 // - Results are size-capped with an explicit truncation marker, because
 //   shipping megabytes of page into a model context is its own accident.
 //
-// Tools are marked gated (navigate, click, fill) or free (read, scrape).
+// Tools are marked gated (navigate, click, fill, select) or free (read,
+// text, scrape).
 // The gate is not enforced here: run() executes what it is told. Consent is
 // the caller's job (the panel asks; tests pass a scripted gate), because a
 // gate inside the tool layer would be untestable without Electron.
@@ -146,6 +147,56 @@ const READBACK_EXPRESSION = `(sel) => (() => {
   const el = document.querySelector(sel)
   if (!el) return ''
   return el.isContentEditable ? (el.innerText || '').trim() : String(el.value ?? '')
+})()`
+
+// A dropdown is matched by its option label first and its value second,
+// because models and people both speak in labels. The act reports the
+// canonical label it landed on so the read-back has something honest to
+// be compared against.
+const SELECT_EXPRESSION = `(cmd) => (() => {
+  const el = document.querySelector(cmd.selector)
+  if (!el) return JSON.stringify({ acted: false, reason: 'gone' })
+  const wanted = String(cmd.value).trim().toLowerCase()
+  const options = Array.from(el.options || [])
+  const match = options.find((o) => o.value.toLowerCase() === wanted) ||
+    options.find((o) => (o.textContent || '').trim().toLowerCase() === wanted)
+  if (!match) {
+    return JSON.stringify({
+      acted: false,
+      reason: 'no such option',
+      options: options.slice(0, 30).map((o) => ({ value: o.value, label: (o.textContent || '').trim() })),
+    })
+  }
+  el.scrollIntoView({ block: 'center' })
+  el.focus()
+  el.value = match.value
+  el.dispatchEvent(new Event('input', { bubbles: true }))
+  el.dispatchEvent(new Event('change', { bubbles: true }))
+  el.blur()
+  return JSON.stringify({ acted: true, value: match.value, label: (match.textContent || '').trim() })
+})()`
+
+const SELECT_READBACK_EXPRESSION = `(sel) => (() => {
+  const el = document.querySelector(sel)
+  if (!el) return ''
+  const opt = el.selectedOptions && el.selectedOptions[0]
+  return opt ? (opt.textContent || '').trim() : String(el.value ?? '')
+})()`
+
+// Reading one element's own words. The count is checked here, in the page,
+// because picking the first of many matches silently is exactly the guess
+// this layer refuses to make.
+const TEXT_EXPRESSION = `(sel) => (() => {
+  let matches
+  try { matches = document.querySelectorAll(sel) } catch { return JSON.stringify({ badSelector: true }) }
+  if (matches.length !== 1) return JSON.stringify({ count: matches.length, text: '' })
+  const el = matches[0]
+  const r = el.getBoundingClientRect()
+  return JSON.stringify({
+    count: 1,
+    text: (el.innerText || '').trim(),
+    visible: r.width > 0 && r.height > 0,
+  })
 })()`
 
 /**
@@ -311,6 +362,59 @@ export function createTools(host) {
     return capResult({ ok: true, url, content: outcome.stdout ?? '', command: ['python3', '-m', 'curl_reap.cli', 'get', url] })
   }
 
+  async function pageSelect(/** @type {any} */ args) {
+    const value = String(args.value ?? '').trim()
+    if (!value) {
+      return { error: 'refusing to select nothing; give the option label or its value' }
+    }
+
+    const found = await inspectOne(args)
+    if (found.error) return found
+    const item = /** @type {InspectItem} */ (found.item)
+    if (item.disabled) return { error: 'that control is disabled' }
+    if (item.tag !== 'select') {
+      return { error: `<${item.tag}> is not a dropdown; page_select only operates <select> elements` }
+    }
+
+    const act = await evalJson(`(${SELECT_EXPRESSION})(${JSON.stringify({ selector: args.selector, value })})`)
+    if (!act.acted) {
+      const listed = (act.options ?? []).map((/** @type {{ label?: string }} */ o) => o.label || o.value).join(', ')
+      return { error: `no option matched "${value}". The options are: ${listed}` }
+    }
+    await host.settle()
+    const rawBack = await host.evaluate(`(${SELECT_READBACK_EXPRESSION})(${JSON.stringify(args.selector)})`)
+    const landed = typeof rawBack === 'string' ? rawBack : String(rawBack ?? '')
+    if (landed !== act.label) {
+      return {
+        ok: false,
+        note: `MISMATCH: asked for "${act.label}" but the selection now reads "${landed.slice(0, 120)}"; the page rewrote it`,
+      }
+    }
+    return { ok: true, changed: true, selected: act.label, value: act.value }
+  }
+
+  async function pageText(/** @type {any} */ args) {
+    if (!String(args.selector ?? '').trim()) {
+      return { error: 'no selector given' }
+    }
+    const read = await evalJson(`(${TEXT_EXPRESSION})(${JSON.stringify(String(args.selector))})`)
+    if (read.badSelector) {
+      return { error: `${args.selector} is not a usable selector` }
+    }
+    if (read.count === 0) {
+      return { error: `nothing matched ${args.selector}; refusing to guess` }
+    }
+    if (read.count > 1) {
+      return { error: `${read.count} elements matched ${args.selector}. Refusing to choose among them; narrow the selector or add a within container.` }
+    }
+    return {
+      ok: true,
+      text: read.text,
+      visible: read.visible,
+      note: read.visible ? undefined : 'the element exists but is not visible on screen',
+    }
+  }
+
   /** What changed between two snapshots, in words a person can audit. */
   function diffSnapshots(/** @type {PageSnapshot} */ before, /** @type {PageSnapshot} */ after) {
     /** @type {string[]} */
@@ -339,9 +443,11 @@ export function createTools(host) {
   /** @type {Record<string, (args: any) => Promise<any>>} */
   const tools = {
     page_read: pageRead,
+    page_text: pageText,
     page_navigate: pageNavigate,
     page_click: pageClick,
     page_fill: pageFill,
+    page_select: pageSelect,
     page_scrape: pageScrape,
   }
 
@@ -360,6 +466,12 @@ export function createTools(host) {
       input: { type: 'object', properties: { url: { type: 'string', description: 'https address to fetch' } }, required: ['url'] },
     },
     {
+      name: 'page_text',
+      description: 'Read the exact visible text of one element by selector. Use when page_read\'s preview is not enough and you need a specific section, table or paragraph.',
+      gated: false,
+      input: { type: 'object', properties: { selector: { type: 'string' } }, required: ['selector'] },
+    },
+    {
       name: 'page_navigate',
       description: 'Navigate the tab to an address or search phrase, through the same rules as the address bar. Refused schemes stay refused.',
       gated: true,
@@ -376,6 +488,12 @@ export function createTools(host) {
       description: 'Type text into one input by selector, then read it back to verify. Password fields and over-maxlength answers are refused.',
       gated: true,
       input: { type: 'object', properties: { selector: { type: 'string' }, text: { type: 'string' } }, required: ['selector', 'text'] },
+    },
+    {
+      name: 'page_select',
+      description: 'Choose one option of a <select> dropdown, matched by the option\'s label or value, then read the selection back to verify. The full option list is reported when nothing matches.',
+      gated: true,
+      input: { type: 'object', properties: { selector: { type: 'string' }, value: { type: 'string', description: 'option label or value to select' } }, required: ['selector', 'value'] },
     },
   ]
 

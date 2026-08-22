@@ -17,7 +17,6 @@ import { resolveOmnibox, ENGINES } from './omnibox.js'
 import { installSafetyNet } from './resilience.js'
 import { installBlocker } from './tracking.js'
 import { settingsFile, readSettings, writeSettings } from './settings.js'
-import { shortcutsFile, readShortcuts, addShortcut, removeShortcut } from './shortcuts.js'
 import { loadExtensions, summarise } from './extensions.js'
 import { describeEndpoint, endpointFile, writeEndpoint, clearEndpoint } from './endpoint.js'
 import { readTab, summariseDocument } from './readPort.js'
@@ -837,35 +836,18 @@ function newTabOnly(handler) {
   }
 }
 
-// The new tab page's surface, refused for every other page.
+// The new tab page's surface, refused for every other page. Shortcuts were
+// removed outright: a grid nobody could populate without the broken dialog
+// is worse than no grid, and the page reads better as one honest search box.
 ipcMain.handle(
   'newtab:state',
   newTabOnly(() => {
-    const dir = app.getPath('userData')
     const current = settings()
     return {
-      shortcuts: readShortcuts(shortcutsFile(dir)),
       rememberHistory: current.rememberHistory,
       blockTrackers: current.blockTrackers,
     }
   }),
-)
-
-ipcMain.handle(
-  'newtab:add',
-  newTabOnly((_e, /** @type {{url?: unknown, title?: unknown}} */ entry) =>
-    addShortcut(shortcutsFile(app.getPath('userData')), {
-      url: String(entry?.url ?? ''),
-      title: entry?.title ? String(entry.title) : undefined,
-    }),
-  ),
-)
-
-ipcMain.handle(
-  'newtab:remove',
-  newTabOnly((_e, /** @type {unknown} */ url) =>
-    removeShortcut(shortcutsFile(app.getPath('userData')), String(url ?? '')),
-  ),
 )
 
 ipcMain.handle(
@@ -877,20 +859,6 @@ ipcMain.handle(
   }),
 )
 
-// A tile goes through the same resolver as the address bar, so a tile can
-// never open something the address bar would refuse.
-ipcMain.handle(
-  'newtab:open',
-  newTabOnly((_e, /** @type {unknown} */ url) => {
-    const result = navigate(String(url ?? ''))
-    if (result.kind === 'refused') notify(`Troy will not open that: ${result.reason ?? ''}`)
-    return result.kind
-  }),
-)
-
-// Reading the live tab. Returns structured page facts the agent panel and
-// bridge can use before the full read pipeline lands. Attaches CDP briefly,
-// the same way the Cdp port does, and always detaches so DevTools stay usable.
 // Reading the live tab through the real pipeline: settle, extract, cover,
 // transcribe, fuse. The heavy lifting lives in src/read and the tab adapter
 // in readPort.js; this handler stays thin on purpose. Attaches CDP briefly,
@@ -971,6 +939,22 @@ function maybeRecordHistory(tab, urlOverride) {
 }
 
 app.whenReady().then(async () => {
+  // The About panel is the one page every user eventually reads, so it says
+  // plainly what Troy is and where its author's other work lives.
+  app.setAboutPanelOptions({
+    applicationName: 'Troy',
+    applicationVersion: app.getVersion(),
+    credits: [
+      'A browser an agent can actually read and drive.',
+      '',
+      'Troy is a real Chromium browser with its own chrome, built so an AI agent can attach to the window you are already signed into and work the page with you. Most automation starts a fresh, empty browser; Troy inverts that: you browse in it, and the agent joins your session.',
+      '',
+      'Made by Anish Kr Singh.',
+      'More of my work: https://anishfyi.com and https://velofy.co',
+      'Project home: https://anishfyi.com/troy',
+    ].join('\n'),
+  })
+
   // Before anything else. An uncaught error in a handler used to end the
   // browser, tabs and all, and report itself only as "Troy quit unexpectedly".
   installSafetyNet({

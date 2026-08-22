@@ -104,16 +104,18 @@ const snapshotA = {
 const snapshotB = { ...snapshotA, fields: [{ k: 'city', v: 'Pune' }], visibleFields: 2 }
 
 describe('the tool specs', () => {
-  it('declare read and scrape free, and navigate, click and fill gated', () => {
+  it('declare read, text and scrape free, and navigate, click, fill and select gated', () => {
     const { host } = makeHost()
     const { specs } = createTools(host)
     const gated = Object.fromEntries(specs.map((s) => [s.name, s.gated]))
     expect(gated).toEqual({
       page_read: false,
+      page_text: false,
       page_scrape: false,
       page_navigate: true,
       page_click: true,
       page_fill: true,
+      page_select: true,
     })
   })
 
@@ -349,6 +351,128 @@ describe('page_scrape', () => {
     expect(JSON.stringify(result).length).toBeLessThanOrEqual(MAX_TOOL_RESULT_CHARS)
     expect(result.truncated).toBe(true)
     expect(String(result.note)).toMatch(/truncat/i)
+  })
+})
+
+describe('page_select', () => {
+  /** A dropdown the guards have no reason to refuse. */
+  const plainSelect = {
+    ...plainInput,
+    tag: 'select',
+    type: '',
+    name: 'country',
+    editable: false,
+  }
+
+  it('refuses an empty option before touching the page', async () => {
+    const { host, calls } = makeHost()
+    const result = await createTools(host).run('page_select', { selector: '#c', value: '  ' })
+    expect(result.error).toBeTruthy()
+    expect(calls).toHaveLength(0)
+  })
+
+  it('refuses a control that is not a select', async () => {
+    const { host } = makeHost({
+      evalResults: [{ count: 1, items: [plainInput] }],
+    })
+    const result = await createTools(host).run('page_select', { selector: '#city', value: 'Pune' })
+    expect(String(result.error)).toMatch(/not a dropdown|<select>/i)
+  })
+
+  it('refuses a disabled dropdown', async () => {
+    const { host } = makeHost({
+      evalResults: [{ count: 1, items: [{ ...plainSelect, disabled: true }] }],
+    })
+    const result = await createTools(host).run('page_select', { selector: '#c', value: 'India' })
+    expect(String(result.error)).toMatch(/disabled/i)
+  })
+
+  it('refuses an ambiguous selector', async () => {
+    const { host } = makeHost({
+      evalResults: [{ count: 2, items: [plainSelect, plainSelect] }],
+    })
+    const result = await createTools(host).run('page_select', { selector: 'select', value: 'India' })
+    expect(String(result.error)).toMatch(/2 elements|refusing/i)
+  })
+
+  it('lists the options when the requested one does not exist', async () => {
+    const { host } = makeHost({
+      evalResults: [
+        { count: 1, items: [plainSelect] },
+        { acted: false, reason: 'no such option', options: [{ value: 'in', label: 'India' }, { value: 'jp', label: 'Japan' }] },
+      ],
+    })
+    const result = await createTools(host).run('page_select', { selector: '#c', value: 'Narnia' })
+    expect(String(result.error)).toMatch(/no option matched/)
+    expect(String(result.error)).toContain('Japan')
+  })
+
+  it('verifies the selection landed by reading it back', async () => {
+    const { host } = makeHost({
+      evalResults: [
+        { count: 1, items: [plainSelect] },
+        { acted: true, value: 'in', label: 'India' },
+        'India',
+      ],
+    })
+    const result = await createTools(host).run('page_select', { selector: '#c', value: 'in' })
+    expect(result.ok).toBe(true)
+    expect(result.selected).toBe('India')
+  })
+
+  it('reports a mismatch honestly when the page rewrote the selection', async () => {
+    const { host } = makeHost({
+      evalResults: [
+        { count: 1, items: [plainSelect] },
+        { acted: true, value: 'in', label: 'India' },
+        'Japan',
+      ],
+    })
+    const result = await createTools(host).run('page_select', { selector: '#c', value: 'in' })
+    expect(result.ok).toBe(false)
+    expect(String(result.note)).toMatch(/MISMATCH/)
+  })
+})
+
+describe('page_text', () => {
+  it('refuses an empty selector', async () => {
+    const { host, calls } = makeHost()
+    const result = await createTools(host).run('page_text', { selector: '' })
+    expect(result.error).toBeTruthy()
+    expect(calls).toHaveLength(0)
+  })
+
+  it('refuses when nothing matches, without guessing', async () => {
+    const { host } = makeHost({ evalResults: [{ count: 0, text: '' }] })
+    const result = await createTools(host).run('page_text', { selector: '#missing' })
+    expect(String(result.error)).toMatch(/nothing matched/i)
+  })
+
+  it('refuses when several elements match, instead of taking the first silently', async () => {
+    const { host } = makeHost({ evalResults: [{ count: 3, text: '' }] })
+    const result = await createTools(host).run('page_text', { selector: 'p' })
+    expect(String(result.error)).toMatch(/3 elements|refusing/i)
+  })
+
+  it('returns the element\'s text when exactly one matches', async () => {
+    const { host } = makeHost({ evalResults: [{ count: 1, text: 'Total due: 42', visible: true }] })
+    const result = await createTools(host).run('page_text', { selector: '#total' })
+    expect(result.ok).toBe(true)
+    expect(result.text).toBe('Total due: 42')
+    expect(result.visible).toBe(true)
+  })
+
+  it('says when the element exists but is not painted', async () => {
+    const { host } = makeHost({ evalResults: [{ count: 1, text: 'hidden note', visible: false }] })
+    const result = await createTools(host).run('page_text', { selector: '.note' })
+    expect(result.ok).toBe(true)
+    expect(String(result.note)).toMatch(/not visible/i)
+  })
+
+  it('reports a selector that does not compile', async () => {
+    const { host } = makeHost({ evalResults: [{ badSelector: true }] })
+    const result = await createTools(host).run('page_text', { selector: '>>>' })
+    expect(String(result.error)).toMatch(/not a usable selector/i)
   })
 })
 
