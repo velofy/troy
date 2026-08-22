@@ -22,6 +22,8 @@ afterPack: scripts/after-pack.cjs
 files:
   - package.json
   - src/browser/**/*
+  - src/read/**/*
+  - src/agent/**/*
   - build/icon.png
   - '!**/*.map'
   - '!**/*.ts'
