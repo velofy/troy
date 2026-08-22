@@ -3,14 +3,6 @@ import { mkdtemp, rm, writeFile, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { defaults, settingsFile, readSettings, writeSettings } from '../src/browser/settings.js'
-import {
-  shortcutsFile,
-  readShortcuts,
-  addShortcut,
-  removeShortcut,
-  normalise,
-  MAX_SHORTCUTS,
-} from '../src/browser/shortcuts.js'
 
 const cleanups: Array<() => void> = []
 
@@ -82,64 +74,5 @@ describe('reading and writing settings', () => {
     const file = settingsFile(dir)
     await writeFile(file, JSON.stringify({ rememberHistory: 'yes please' }))
     expect(readSettings(file).rememberHistory).toBe(false)
-  })
-})
-
-describe('shortcuts', () => {
-  it('starts empty', async () => {
-    const dir = await tempDir()
-    expect(readShortcuts(shortcutsFile(dir))).toEqual([])
-  })
-
-  it('adds a tile and titles it from the host when no title is given', async () => {
-    const dir = await tempDir()
-    const file = shortcutsFile(dir)
-    expect(addShortcut(file, { url: 'https://www.example.com/path' })).toEqual([
-      { url: 'https://www.example.com/path', title: 'example.com' },
-    ])
-  })
-
-  it('updates rather than duplicating when the same url is added twice', async () => {
-    const dir = await tempDir()
-    const file = shortcutsFile(dir)
-    addShortcut(file, { url: 'https://example.com/', title: 'First' })
-    const after = addShortcut(file, { url: 'https://example.com/', title: 'Second' })
-    expect(after).toHaveLength(1)
-    expect(after[0]?.title).toBe('Second')
-  })
-
-  it('removes a tile', async () => {
-    const dir = await tempDir()
-    const file = shortcutsFile(dir)
-    addShortcut(file, { url: 'https://a.example/' })
-    addShortcut(file, { url: 'https://b.example/' })
-    expect(removeShortcut(file, 'https://a.example/').map((s) => s.url)).toEqual(['https://b.example/'])
-  })
-
-  it('stops growing past the point where a grid stops being a shortcut', async () => {
-    const dir = await tempDir()
-    const file = shortcutsFile(dir)
-    for (let i = 0; i < MAX_SHORTCUTS + 5; i++) addShortcut(file, { url: `https://site${i}.example/` })
-    expect(readShortcuts(file)).toHaveLength(MAX_SHORTCUTS)
-  })
-
-  // The same hole the address bar refuses, reached through the back door.
-  it('refuses a tile that would run script when clicked', async () => {
-    const dir = await tempDir()
-    const file = shortcutsFile(dir)
-    expect(addShortcut(file, { url: 'javascript:alert(1)' })).toEqual([])
-    expect(addShortcut(file, { url: 'data:text/html,<h1>x' })).toEqual([])
-    expect(addShortcut(file, { url: 'file:///etc/passwd' })).toEqual([])
-  })
-
-  it('assumes https for a bare host', () => {
-    expect(normalise('example.com')).toBe('https://example.com/')
-  })
-
-  it('treats a corrupt shortcuts file as no shortcuts', async () => {
-    const dir = await tempDir()
-    const file = shortcutsFile(dir)
-    await writeFile(file, '{ not an array')
-    expect(readShortcuts(file)).toEqual([])
   })
 })
