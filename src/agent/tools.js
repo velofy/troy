@@ -378,7 +378,7 @@ export function createTools(host) {
 
     const act = await evalJson(`(${SELECT_EXPRESSION})(${JSON.stringify({ selector: args.selector, value })})`)
     if (!act.acted) {
-      const listed = (act.options ?? []).map((/** @type {{ label?: string }} */ o) => o.label || o.value).join(', ')
+      const listed = (act.options ?? []).map((/** @type {any} */ o) => o.label || o.value).join(', ')
       return { error: `no option matched "${value}". The options are: ${listed}` }
     }
     await host.settle()
