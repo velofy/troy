@@ -35,12 +35,17 @@ export type ReadResult =
   | {
       url: string
       title: string
-      readyState: string
+      /** Every fused block, dom and ocr together. */
+      blockCount: number
+      domBlockCount: number
+      ocrBlockCount: number
+      /** Page regions the DOM could not explain; each was OCR'd or left untranscribed. */
+      regionCount: number
       characterCount: number
-      linkCount: number
-      imageCount: number
-      headingCount: number
-      textPreview: string
+      elapsedMs: number
+      settled: boolean
+      ocrEngine: string
+      markdown: string
       degraded: boolean
     }
   | { error: string }

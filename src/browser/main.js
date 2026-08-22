@@ -20,6 +20,7 @@ import { settingsFile, readSettings, writeSettings } from './settings.js'
 import { shortcutsFile, readShortcuts, addShortcut, removeShortcut } from './shortcuts.js'
 import { loadExtensions, summarise } from './extensions.js'
 import { describeEndpoint, endpointFile, writeEndpoint, clearEndpoint } from './endpoint.js'
+import { readTab, summariseDocument } from './readPort.js'
 import { historyFile, recordVisit, clearHistory } from './history.js'
 
 const dir = path.dirname(fileURLToPath(import.meta.url))
@@ -890,61 +891,18 @@ ipcMain.handle(
 // Reading the live tab. Returns structured page facts the agent panel and
 // bridge can use before the full read pipeline lands. Attaches CDP briefly,
 // the same way the Cdp port does, and always detaches so DevTools stay usable.
+// Reading the live tab through the real pipeline: settle, extract, cover,
+// transcribe, fuse. The heavy lifting lives in src/read and the tab adapter
+// in readPort.js; this handler stays thin on purpose. Attaches CDP briefly,
+// the same way the Cdp port does, and always detaches so DevTools stay usable.
 ipcMain.handle('agent:read', async () => {
   const wc = activeContents()
   if (!wc) return { error: 'no active tab' }
-  let attachedHere = false
   try {
-    if (!wc.debugger.isAttached()) {
-      wc.debugger.attach('1.3')
-      attachedHere = true
-    }
-    const { result } = await wc.debugger.sendCommand('Runtime.evaluate', {
-      expression: `(() => {
-        const body = document.body
-        const painted = body ? (body.innerText || '').trim() : ''
-        const raw = body ? (body.textContent || '').trim() : ''
-        const degraded = painted.length === 0 && raw.length > 0
-        const text = painted || raw
-        const links = body ? body.querySelectorAll('a[href]').length : 0
-        const images = body ? body.querySelectorAll('img').length : 0
-        const headings = body ? body.querySelectorAll('h1,h2,h3,h4,h5,h6').length : 0
-        return JSON.stringify({
-          title: document.title || '',
-          readyState: document.readyState || '',
-          characterCount: text.length,
-          linkCount: links,
-          imageCount: images,
-          headingCount: headings,
-          textPreview: text.slice(0, 4000),
-          degraded,
-        })
-      })()`,
-      returnByValue: true,
-    })
-    const parsed = JSON.parse(String(result.value ?? '{}'))
-    return {
-      url: wc.getURL(),
-      title: String(parsed.title ?? wc.getTitle() ?? ''),
-      readyState: String(parsed.readyState ?? ''),
-      characterCount: Number(parsed.characterCount ?? 0),
-      linkCount: Number(parsed.linkCount ?? 0),
-      imageCount: Number(parsed.imageCount ?? 0),
-      headingCount: Number(parsed.headingCount ?? 0),
-      textPreview: String(parsed.textPreview ?? ''),
-      degraded: Boolean(parsed.degraded),
-    }
+    const doc = await readTab(wc)
+    return summariseDocument(doc)
   } catch (err) {
     return { error: errorMessage(err) }
-  } finally {
-    // Leaving the debugger attached locks DevTools out of the tab for good.
-    if (attachedHere && !wc.isDestroyed() && wc.debugger.isAttached()) {
-      try {
-        wc.debugger.detach()
-      } catch {
-        // Already gone with the renderer; nothing to release.
-      }
-    }
   }
 })
 

@@ -261,12 +261,12 @@ document.getElementById('readbtn').addEventListener('click', async () => {
     const parts = [
       result.url,
       result.title,
-      `${result.readyState}, ${result.characterCount} characters`,
-      `${result.linkCount} links, ${result.imageCount} images, ${result.headingCount} headings`,
+      `${result.blockCount} blocks (${result.domBlockCount} dom, ${result.ocrBlockCount} ocr), ${result.regionCount} regions`,
+      `${result.characterCount} characters in ${result.elapsedMs}ms, settle ${result.settled ? 'ok' : 'timed out'}`,
     ]
-    if (result.degraded) parts.push('text from textContent fallback')
+    if (result.degraded) parts.push('page never finished settling')
     info.textContent = parts.join('\n')
-    out.textContent = result.textPreview
+    out.textContent = result.markdown
   }
   panelBody.append(info, out)
 })

@@ -746,19 +746,19 @@ describe('the agent panel', () => {
     const result = (await chrome.evaluate(() => window.troy.read())) as {
       url?: string
       title?: string
-      readyState?: string
+      blockCount?: number
+      domBlockCount?: number
       characterCount?: number
-      linkCount?: number
-      textPreview?: string
+      markdown?: string
       error?: string
     }
     expect(result.error).toBeUndefined()
     expect(result.url).toBe(`${fixtures.url}/article.html`)
     expect(result.title).toContain('article')
-    expect(result.readyState).toBe('complete')
-    expect(result.characterCount).toBeGreaterThan(0)
-    expect(result.linkCount).toBeGreaterThan(0)
-    expect(result.textPreview).toContain('Vellichor Migration')
+    expect(result.blockCount ?? 0).toBeGreaterThan(0)
+    expect(result.domBlockCount ?? 0).toBeGreaterThan(0)
+    expect(result.characterCount ?? 0).toBeGreaterThan(0)
+    expect(result.markdown).toContain('Vellichor Migration')
 
     // A debugger left attached locks DevTools out of that tab permanently.
     const stillAttached = await app.evaluate(({ webContents }, target) => {
