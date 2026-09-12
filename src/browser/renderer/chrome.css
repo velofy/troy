@@ -1,0 +1,326 @@
+/* Troy's chrome. Dark like Helium, with the tab strip and toolbar sized to
+   the 88px the main process reserves above every page view (CHROME_HEIGHT). */
+
+:root {
+  --chrome: #202124;
+  --strip: #17181a;
+  --ink: #e8eaed;
+  --dim: #b3b8bf;
+  --line: #3c4043;
+  --accent: #d97757;
+
+  /* Glass. Everything that sits on the vibrant surface is a tint of white
+     rather than its own grey, so the desktop behind the window shows
+     through consistently instead of each control inventing its own shade.
+     The blur itself is the window's, done by the compositor. */
+  --glass-strip: rgba(14, 15, 17, .78);
+  --glass-bar: rgba(24, 25, 28, .74);
+  --tab: rgba(255, 255, 255, .13);
+  --tab-hover: rgba(255, 255, 255, .06);
+  --field: rgba(255, 255, 255, .08);
+  --field-focus: rgba(255, 255, 255, .13);
+  --hairline: rgba(255, 255, 255, .09);
+  --control-hover: rgba(255, 255, 255, .11);
+  --control-active: rgba(255, 255, 255, .18);
+}
+
+/*
+  There is deliberately no backdrop-filter anywhere in this file.
+
+  It would cost a full-width GPU blur pass every frame the chrome repaints,
+  and it would buy nothing, because backdrop-filter can only blur what is
+  behind an element *within the same compositing surface*. The web page is a
+  separate WebContentsView, so the chrome cannot see it to blur it. The real
+  glass is the window's own vibrancy, which the system composites for free.
+
+  On a platform without vibrancy these tints land on the solid window colour
+  below and read as a normal dark chrome, which is the right fallback.
+*/
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  /* Clear, so the window's vibrancy is what shows through the chrome. */
+  background: transparent;
+  color: var(--ink);
+  font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  overflow: hidden;
+  user-select: none;
+}
+
+/* ---------- tab strip ---------- */
+
+.tabstrip {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 44px;
+  padding: 6px 8px 0;
+  background: var(--glass-strip);
+  -webkit-app-region: drag;
+}
+.traffic-spacer { width: 72px; flex: none; }
+.tabs { display: flex; align-items: flex-end; gap: 2px; overflow: hidden; min-width: 0; }
+
+/* Tabs take a roomy fixed width and shrink only once the strip is crowded,
+   the way Chrome sizes them. Sizing to content instead made a tab jump width
+   every time a page title changed. */
+.tab {
+  -webkit-app-region: no-drag;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  width: 268px;
+  flex: 0 1 auto;
+  min-width: 54px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px 8px 0 0;
+  background: transparent;
+  color: var(--dim);
+  font: inherit;
+  cursor: default;
+}
+.tab { transition: background .12s ease; }
+.tab:hover { background: var(--tab-hover); }
+/* The active tab is a raised pane of glass: a touch brighter than the strip,
+   with a hairline catching the light along its top edge. */
+.tab.active {
+  background: var(--tab);
+  color: var(--ink);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .10);
+}
+.tab .label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* A round hit target with the cross exactly on its centre. Grid centring
+   does the placing, and the icon is drawn rather than typed, because the
+   multiplication sign sits on the font's math axis and always looked a
+   pixel high inside the circle. */
+.tab .x {
+  flex: none;
+  width: 20px; height: 20px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--dim);
+  cursor: default;
+  transition: background .12s ease, color .12s ease;
+}
+.tab .x svg {
+  width: 12px; height: 12px;
+  display: block;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+  stroke-linecap: round;
+}
+.tab.active .x { color: var(--ink); }
+.tab .x:hover { background: var(--control-hover); color: var(--ink); }
+.tab .x:active { background: var(--control-active); }
+.tab .x:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.tab .fav {
+  flex: none;
+  width: 15px; height: 15px;
+  border-radius: 3px;
+  object-fit: contain;
+}
+.tab .fav[hidden] { display: none; }
+.tab .label { flex: 1; }
+
+/* A tab that is loading spins where its icon goes, so a background tab still
+   working is visible without switching to it. Rotating a transform stays on
+   the compositor, so this costs no layout and no paint. */
+.tab .spin {
+  flex: none;
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(255, 255, 255, .22);
+  border-top-color: var(--accent);
+  animation: spin .7s linear infinite;
+}
+.tab .spin[hidden] { display: none; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .tab .spin { animation-duration: 2.4s; }
+}
+
+.newtab {
+  -webkit-app-region: no-drag;
+  flex: none;
+  width: 28px; height: 28px;
+  margin-bottom: 3px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0; border-radius: 50%;
+  background: transparent;
+  color: var(--dim);
+  cursor: default;
+}
+.newtab { transition: background .12s ease, color .12s ease; }
+.newtab:hover { background: var(--control-hover); color: var(--ink); }
+.newtab:active { background: var(--control-active); }
+.newtab:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* ---------- toolbar ---------- */
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 44px;
+  padding: 0 8px;
+  background: var(--glass-bar);
+}
+
+.nav, .agent {
+  flex: none;
+  width: 32px; height: 32px;
+  display: grid; place-items: center;
+  border: 0; border-radius: 50%;
+  background: transparent;
+  color: var(--dim);
+  cursor: default;
+}
+.nav, .agent { transition: background .12s ease, color .12s ease; }
+.nav:hover, .agent:hover { background: var(--control-hover); color: var(--ink); }
+.nav:active:not(:disabled), .agent:active { background: var(--control-active); }
+.nav:focus-visible, .agent:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.nav:disabled { opacity: .38; }
+.nav svg, .agent svg, .newtab svg {
+  width: 16px; height: 16px;
+  display: block;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.agent svg { width: 18px; height: 18px; stroke-width: 2; }
+.agent.on { color: var(--accent); }
+
+.omnibox {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  margin: 0 6px;
+  padding: 0 12px;
+  border-radius: 16px;
+  background: var(--field);
+}
+/* Troy's accent, not Chrome's blue. One hairline at rest so the field has an
+   edge against the glass, and the accent ring only once it has focus. */
+.omnibox {
+  box-shadow: inset 0 0 0 1px var(--hairline);
+  transition: background .12s ease, box-shadow .12s ease;
+}
+.omnibox:focus-within {
+  background: var(--field-focus);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.omni-icon { width: 15px; height: 15px; flex: none; fill: none; stroke: var(--dim); stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+#omni {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  outline: none;
+  user-select: text;
+}
+#omni::placeholder { color: var(--dim); }
+
+/* ---------- loading ---------- */
+
+/* A spinning reload icon tells you the browser is busy. This tells you the
+   page is arriving, which is the thing you actually care about. It jumps
+   straight to 30% because progress that starts at zero and crawls reads as
+   slow even when it is not, then eases toward 90% while the page loads and
+   snaps to 100% when it lands. */
+.progress {
+  position: fixed;
+  /* Inside the chrome, not below it. The page's WebContentsView is laid out
+     from y=88 down and composites above this page, so a bar at 88px renders
+     underneath it and is never seen. Sitting it on the toolbar's bottom two
+     pixels puts it on the seam, which is where it was meant to look like it
+     was anyway. */
+  top: 86px; left: 0;
+  height: 2px;
+  width: 100%;
+  transform: scaleX(0);
+  transform-origin: 0 50%;
+  background: var(--accent);
+  opacity: 0;
+  pointer-events: none;
+  z-index: 5;
+  transition: transform .18s ease-out, opacity .18s ease-out;
+}
+.progress.on { opacity: 1; }
+.progress.done { transition: transform .12s ease-out, opacity .3s ease-in .12s; }
+
+@media (prefers-reduced-motion: reduce) {
+  .progress { transition: opacity .1s linear; }
+}
+
+/* ---------- refusal notice ---------- */
+
+/* Sits just under the toolbar, over the top of the page, because a refusal
+   the user cannot see is indistinguishable from an address bar that broke. */
+.notice {
+  position: fixed;
+  top: 88px; left: 0; right: 0;
+  margin: 0;
+  padding: 9px 14px;
+  background: #3a2b26;
+  border-bottom: 1px solid var(--accent);
+  color: var(--ink);
+  font-size: 12px;
+}
+.notice[hidden] { display: none; }
+
+/* ---------- agent panel ---------- */
+
+.panel {
+  position: fixed;
+  top: 88px; right: 0; bottom: 0;
+  width: 340px;
+  border-left: 1px solid var(--line);
+  background: #1a1b1d;
+  display: flex;
+  flex-direction: column;
+}
+.panel[hidden] { display: none; }
+.panel-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--line);
+}
+.panel-title {
+  font-size: 10.5px; letter-spacing: .18em; text-transform: uppercase; color: var(--accent);
+}
+.readbtn {
+  border: 1px solid var(--line); border-radius: 6px;
+  background: var(--tab); color: var(--ink);
+  font: inherit; font-size: 12px; padding: 5px 10px; cursor: default;
+}
+.readbtn:hover { background: #3c4043; }
+.panel-body { flex: 1; overflow: auto; padding: 14px; }
+.hint { margin: 0; color: var(--dim); font-size: 12px; line-height: 1.6; }
+.readout {
+  margin: 0; white-space: pre-wrap; word-break: break-word;
+  font: 11.5px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--ink); user-select: text;
+}
+.readmeta { margin: 0 0 10px; color: var(--dim); font-size: 11px; }

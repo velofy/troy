@@ -1,0 +1,83 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Troy fixture: custom controls</title>
+<style>
+  body{font-family:system-ui;max-width:720px;margin:40px auto;padding:0 20px}
+  .q{margin:26px 0;padding-bottom:18px;border-bottom:1px solid #ddd}
+  .opts{display:flex;gap:20px;margin-top:8px}
+  .opt{display:inline-flex;align-items:center;gap:7px;cursor:pointer}
+  .dot{width:16px;height:16px;border-radius:50%;border:2px solid #888;display:inline-block}
+  .opt.on .dot{background:#111;border-color:#111}
+  .reveal{display:none;margin-top:12px}
+  .reveal.show{display:block}
+  textarea{width:100%;height:70px}
+</style>
+
+<h1>Fixture</h1>
+
+<!--
+  This reproduces the failure that broke the first clicker: custom radio
+  controls with NO native input, several questions on ONE page, and identical
+  "Yes"/"No" label text repeated in every question. A selector strategy that
+  climbs ancestors looking for question text will match the wrong control here,
+  exactly as it did on the real form.
+-->
+
+<div class="q" id="q-using">
+  <p>Are people using your product?</p>
+  <div class="opts">
+    <label class="opt" data-v="yes"><span class="dot"></span>Yes</label>
+    <label class="opt" data-v="no"><span class="dot"></span>No</label>
+  </div>
+  <div class="reveal" id="usercount">
+    <label for="ta-users">How many?</label>
+    <textarea id="ta-users" name="usernums"></textarea>
+  </div>
+</div>
+
+<div class="q" id="q-revenue">
+  <p>Do you have revenue?</p>
+  <div class="opts">
+    <label class="opt" data-v="yes"><span class="dot"></span>Yes</label>
+    <label class="opt" data-v="no"><span class="dot"></span>No</label>
+  </div>
+</div>
+
+<div class="q" id="q-entity">
+  <p>Have you formed ANY legal entity yet?</p>
+  <div class="opts">
+    <label class="opt" data-v="yes"><span class="dot"></span>Yes</label>
+    <label class="opt" data-v="no"><span class="dot"></span>No</label>
+  </div>
+</div>
+
+<div class="q" id="q-noop">
+  <p>This control is deliberately dead (click does nothing).</p>
+  <div class="opts">
+    <label class="opt dead" data-v="yes"><span class="dot"></span>Yes</label>
+    <label class="opt dead" data-v="no"><span class="dot"></span>No</label>
+  </div>
+</div>
+
+<p><a href="/other.html">Go to other page</a></p>
+<p><button type="button" id="danger">Submit application</button></p>
+
+<script>
+  // Selecting is done in JS with no native input, like the real form.
+  document.querySelectorAll('.q').forEach(function (q) {
+    q.querySelectorAll('.opt').forEach(function (o) {
+      o.addEventListener('click', function () {
+        if (o.classList.contains('dead')) return;      // the no-op control
+        q.querySelectorAll('.opt').forEach(function (x) { x.classList.remove('on'); });
+        o.classList.add('on');
+        if (q.id === 'q-using') {
+          document.getElementById('usercount')
+            .classList.toggle('show', o.dataset.v === 'yes');
+        }
+      });
+    });
+  });
+  document.getElementById('danger').addEventListener('click', function () {
+    document.body.innerHTML = '<h1>SUBMITTED</h1>';   // must never happen
+  });
+</script>
