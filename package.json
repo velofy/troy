@@ -1,0 +1,44 @@
+{
+  "name": "@anishfyi/troy",
+  "version": "0.1.4",
+  "private": true,
+  "type": "module",
+  "description": "A browser an agent can actually read: DOM for structure, OCR for the pixels the DOM cannot explain.",
+  "main": "src/browser/main.js",
+  "author": "Anish Kumar <anishfyi@gmail.com>",
+  "scripts": {
+    "detect": "node scripts/detect.mjs",
+    "fill": "node scripts/fill.mjs",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "lint": "eslint src test",
+    "browser": "electron src/browser/main.js",
+    "icons": "node scripts/icons.mjs",
+    "smoke": "node scripts/smoke-packaged.mjs",
+    "stress": "node scripts/stress.mjs",
+    "clean": "rm -rf release",
+    "pack": "npm run clean && electron-builder --dir",
+    "dist:mac": "npm run clean && electron-builder --mac",
+    "dist:win": "npm run clean && electron-builder --win",
+    "dist": "npm run clean && electron-builder --mac --win"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/anishfyi/troy.git"
+  },
+  "homepage": "https://anishfyi.com/troy",
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "@typescript-eslint/eslint-plugin": "^8.66.0",
+    "@typescript-eslint/parser": "^8.66.0",
+    "electron": "^43.3.0",
+    "electron-builder": "^26.15.3",
+    "eslint": "^10.8.1",
+    "playwright": "^1.62.0",
+    "tsx": "^4.23.11",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.10"
+  }
+}

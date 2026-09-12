@@ -1,0 +1,10 @@
+{
+  "mustContain": [
+    "The Hollowmere signal held steady at forty two decibels through the storm."
+  ],
+  "mustNotContain": [
+    "Grackle Ninefold Cipher Alpha",
+    "Wraithcap Ledger Nine Six Two",
+    "Salted Obelisk Protocol Zero"
+  ]
+}

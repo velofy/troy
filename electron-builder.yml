@@ -1,0 +1,84 @@
+# How Troy becomes a thing you can install.
+#
+# Two targets, both unsigned for now: a macOS DMG (Apple silicon and Intel)
+# and a Windows installer plus a portable EXE. Signing certificates change
+# nothing here when they arrive; they are supplied through the environment,
+# so this file does not need to know whether a build is signed.
+
+appId: com.anishfyi.troy
+productName: Troy
+copyright: Copyright (c) 2026 Anish Kumar
+
+directories:
+  output: release
+  buildResources: build
+
+# Reseals the macOS bundle, see the file for why a download is broken without
+# it. A no-op on every other platform.
+afterPack: scripts/after-pack.cjs
+
+# Ship the app and nothing else. No tests, no fixtures, no plan documents,
+# and none of the toolchain that produced the build.
+files:
+  - package.json
+  - src/browser/**/*
+  - build/icon.png
+  - '!**/*.map'
+  - '!**/*.ts'
+
+# Chromium is the bulk of the download either way; compressing it harder is
+# worth the extra minute on a release build.
+compression: maximum
+
+mac:
+  category: public.app-category.developer-tools
+  icon: build/icon.icns
+  darkModeSupport: true
+  # No arch list here on purpose. Pinning both arches makes every macOS build
+  # produce the Intel app too, and packaging an x86_64 app on Apple silicon
+  # runs an Intel binary, which needs Rosetta and prompts for it. The arch
+  # comes from the command line instead, so each machine builds what it is,
+  # and CI runs one native job per architecture.
+  target: [dmg]
+  extendInfo:
+    # Troy opens web pages, so the OS is allowed to offer it as a browser.
+    CFBundleURLTypes:
+      - CFBundleURLName: Web site URL
+        CFBundleURLSchemes: [http, https]
+    NSHumanReadableCopyright: Copyright (c) 2026 Anish Kumar
+
+# Artifact names carry no version, so the download button on the site can be
+# a permanent link to releases/latest/download/<name> instead of something
+# that has to be edited every time a version ships. The version lives in the
+# release title and in the app itself.
+dmg:
+  artifactName: Troy-mac-${arch}.dmg
+  contents:
+    - x: 140
+      y: 180
+      type: file
+    - x: 400
+      y: 180
+      type: link
+      path: /Applications
+
+win:
+  icon: build/icon.png
+  target: [nsis, portable]
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  shortcutName: Troy
+  artifactName: Troy-windows-setup-${arch}.exe
+  uninstallDisplayName: Troy
+
+portable:
+  artifactName: Troy-windows-portable-${arch}.exe
+
+linux:
+  icon: build/icons
+  category: Network
+  target: [AppImage]

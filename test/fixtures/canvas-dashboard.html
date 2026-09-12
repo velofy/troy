@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Troy fixture: canvas dashboard</title>
+<style>
+  body { background: #ffffff; font-family: system-ui; margin: 40px; }
+  canvas { border: 1px solid #cccccc; }
+</style>
+</head>
+<body>
+<h1>Operations Dashboard</h1>
+<canvas id="dashboard" width="480" height="220"></canvas>
+<script>
+  var canvas = document.getElementById('dashboard');
+  var ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = '#111111';
+  ctx.font = 'bold 28px sans-serif';
+  ctx.textBaseline = 'top';
+  ctx.fillText('Throughput: 8842 units', 20, 20);
+  ctx.fillText('Backlog: 317 tickets', 20, 80);
+  ctx.fillText('Uptime: 99.62 percent', 20, 140);
+</script>
+</body>
+</html>

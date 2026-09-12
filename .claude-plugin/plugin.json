@@ -1,0 +1,10 @@
+{
+  "name": "troy-browser",
+  "description": "A browser an agent can actually drive. Attaches to a real logged-in Chromium over CDP and works the page with verification on every action. First capability: filling long application forms one question at a time, drafting each answer from an approved facts file. Fills and verifies, never submits.",
+  "version": "0.2.0",
+  "author": {
+    "name": "anishfyi"
+  },
+  "license": "MIT",
+  "keywords": ["browser", "cdp", "playwright", "automation", "forms", "agent"]
+}
