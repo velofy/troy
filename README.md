@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/logo.svg" alt="" width="72" height="72">
+  <img src="assets/logo.svg" alt="Troy logo: an aperture between two crop marks" width="72" height="72">
 </p>
 
 <h1 align="center">troy</h1>
@@ -7,15 +7,15 @@
 <p align="center">A browser an agent can actually read and drive.</p>
 
 <p align="center">
-  <a href="https://anishfyi.com/troy/">anishfyi.com/troy</a>
+  <a href="https://github.com/velofy/troy/actions/workflows/ci.yml"><img src="https://github.com/velofy/troy/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
+  <a href="https://github.com/velofy/troy/releases/latest"><img src="https://img.shields.io/github/v/release/velofy/troy" alt="Latest release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT license"></a>
+</p>
+
+<p align="center">
+  <b>Docs: <a href="https://velofy.co/troy/">velofy.co/troy</a></b>
   &nbsp;·&nbsp;
-  <a href="https://github.com/velofy/troy/releases/latest">download</a>
-  &nbsp;·&nbsp;
-  <a href="docs/PRD.md">PRD</a>
-  &nbsp;·&nbsp;
-  <a href="docs/DESIGN.md">design</a>
-  &nbsp;·&nbsp;
-  MIT
+  <a href="https://github.com/velofy/troy/releases/latest">Download</a>
 </p>
 
 ---
@@ -58,17 +58,15 @@ inverts that: you browse in it, and an agent joins the session you already have.
 ## Install
 
 ```sh
-brew install --cask anishfyi/tap/troy
+brew install --cask velofy/tap/troy
 ```
 
-Or take a file directly:
+Or download a build from the [latest release](https://github.com/velofy/troy/releases/latest):
 
-| | |
-|---|---|
-| macOS, Apple silicon | [Troy-mac-arm64.dmg](https://github.com/velofy/troy/releases/latest/download/Troy-mac-arm64.dmg) |
-| macOS, Intel | [Troy-mac-x64.dmg](https://github.com/velofy/troy/releases/latest/download/Troy-mac-x64.dmg) |
-| Windows, installer | [Troy-windows-setup-x64.exe](https://github.com/velofy/troy/releases/latest/download/Troy-windows-setup-x64.exe) |
-| Windows, portable | [Troy-windows-portable-x64.exe](https://github.com/velofy/troy/releases/latest/download/Troy-windows-portable-x64.exe) |
+- macOS, Apple silicon: [Troy-mac-arm64.dmg](https://github.com/velofy/troy/releases/latest/download/Troy-mac-arm64.dmg)
+- macOS, Intel: [Troy-mac-x64.dmg](https://github.com/velofy/troy/releases/latest/download/Troy-mac-x64.dmg)
+- Windows, installer: [Troy-windows-setup-x64.exe](https://github.com/velofy/troy/releases/latest/download/Troy-windows-setup-x64.exe)
+- Windows, portable: [Troy-windows-portable-x64.exe](https://github.com/velofy/troy/releases/latest/download/Troy-windows-portable-x64.exe)
 
 Troy is ad-hoc signed but not notarised, and there are no plans to be. Downloaded
 by hand that costs you one gesture on first launch: Control-click then Open on
@@ -76,6 +74,9 @@ macOS, or More info then Run anyway on Windows. The Homebrew cask clears the
 quarantine flag for you, so installing that way costs nothing. Ad-hoc signing is
 not cosmetic: without it, Apple silicon refuses to launch the app at all and
 reports it as damaged.
+
+To run from source, see [Development](#development). Full instructions:
+[velofy.co/troy/installation](https://velofy.co/troy/installation/).
 
 ## Driving it from an agent
 
@@ -147,10 +148,11 @@ settings panel says so rather than implying otherwise.
 **Extensions.** Unpacked Chrome extensions load from `<profile>/extensions/` at
 startup. No store, nothing fetched remotely, `allowFileAccess` off.
 
-**It is fast, and that is enforced.** `npm run stress` opens sixteen tabs each
-animating and streaming requests, then switches tabs, types and reloads while
-counting frames in the chrome. It fails the run below 60fps, if the 95th
-percentile frame misses budget, or if any frame stalls past 100ms.
+**It is fast, and that is enforced.** `npm run stress` opens a set of busy tabs
+(twelve by default), each animating and streaming requests, then switches tabs,
+types and reloads while counting frames in the chrome. It fails the run below
+60fps, if the 95th percentile frame misses budget, or if any frame stalls past
+100ms.
 
 ## What is not built
 
@@ -165,7 +167,9 @@ The read pipeline, which is the thing the name is about:
 
 [`docs/DESIGN.md` §9](docs/DESIGN.md) describes the pipeline, and
 [the original spec](docs/superpowers/specs/2026-08-07-troy-design.md) has it in
-full. Treat both as intent, not as documentation of behaviour that exists.
+full. Treat both as intent, not as documentation of behaviour that exists. The
+[roadmap](https://velofy.co/troy/roadmap/) collects every planned item in one
+place.
 
 Also deliberately absent for now: omnibox suggestions, bookmarks, find-in-page,
 context menus, tab reordering, and any browser engine other than Chromium.
@@ -175,7 +179,19 @@ One thing worth calling out because it is a live gap rather than a plan: the
 reads it yet, so turning it on records nothing. See
 [`docs/PRD.md` §9](docs/PRD.md).
 
-## Documents
+## Documentation
+
+The full docs live at **[velofy.co/troy](https://velofy.co/troy/)**:
+
+- [Installation](https://velofy.co/troy/installation/) and [Quickstart](https://velofy.co/troy/quickstart/)
+- [Driving Troy from an agent](https://velofy.co/troy/driving-troy/)
+- [How Troy reads a page](https://velofy.co/troy/reading-pages/)
+- [Privacy and permissions](https://velofy.co/troy/privacy-and-permissions/)
+- [Claude Code plugin and skills](https://velofy.co/troy/claude-plugin/)
+- [Command line and environment](https://velofy.co/troy/command-line/) and [Configuration and files](https://velofy.co/troy/configuration/)
+- [Troubleshooting](https://velofy.co/troy/troubleshooting/) and [Changelog](https://velofy.co/troy/changelog/)
+
+Design documents in this repository:
 
 - [**PRD**](docs/PRD.md). The problem, who it is for, requirements with their
   real status, success measures, milestones, risks.
@@ -209,6 +225,14 @@ is visible and where it sits.
 running whatever was last built, which is exactly how a months-old binary ends up
 in Spotlight; `npm run dist:*` clears it first.
 
+## Contributing
+
+Issues and pull requests are welcome at
+[github.com/velofy/troy](https://github.com/velofy/troy). A change is accepted
+when a test drives the real application and shows it working, and CI must stay
+green on all three platforms. See
+[Development and releases](https://velofy.co/troy/development/).
+
 ## Name
 
 Troy, for the walls and the long patient siege, not for the horse. That reading
@@ -218,4 +242,4 @@ crop marks: the thing that sees the page.
 
 ## License
 
-MIT
+MIT. See [LICENSE](LICENSE).

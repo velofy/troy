@@ -294,7 +294,7 @@ are invisible from the source tree.
 version so the site can link to `releases/latest/download/<name>` permanently.
 
 Tagging `v*` builds three artifacts on their own runners, smoke-tests each, and
-publishes a release. Distribution is the Homebrew cask at `anishfyi/homebrew-tap`,
+publishes a release. Distribution is the Homebrew cask at `velofy/homebrew-tap`,
 which clears the quarantine flag so an un-notarised app installs in one command.
 
 `release/` is a build directory, not an install. It once held a months-old Intel
