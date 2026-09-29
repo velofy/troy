@@ -26,9 +26,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/anishfyi/troy.git"
+    "url": "git+https://github.com/velofy/troy.git"
   },
-  "homepage": "https://anishfyi.com/troy",
+  "homepage": "https://velofy.co/troy/",
+  "bugs": {
+    "url": "https://github.com/velofy/troy/issues"
+  },
   "devDependencies": {
     "@types/node": "^26.2.0",
     "@typescript-eslint/eslint-plugin": "^8.66.0",
