@@ -22,6 +22,8 @@
 
 <h3 align="center">Sponsors</h3>
 
+<p align="center"><strong>Primary sponsor</strong></p>
+
 <p align="center">
   <a href="https://go.nodemaven.com/troyGH" title="NodeMaven: best proxy for web scraping and automation">
     <img src="https://raw.githubusercontent.com/velofy/troy/main/assets/sponsors/nodemaven-banner.jpg" alt="NodeMaven: best proxy for web scraping and automation with the highest quality IP" width="720">
