@@ -169,9 +169,14 @@ try {
   const fps = median > 0 ? 1000 / median : 0
   const stalls = frames.filter((f) => f > STALL_MS).length
 
-  const memory = await app.evaluate(() => {
-    const used = process.getProcessMemoryInfo ? null : null
-    return { rssMb: Math.round(process.memoryUsage().rss / 1048576), used }
+  const memory = await app.evaluate(async () => {
+    const rssMb = Math.round(process.memoryUsage().rss / 1048576)
+    let privateMb = null
+    if (typeof process.getProcessMemoryInfo === 'function') {
+      const info = await process.getProcessMemoryInfo()
+      if (typeof info.private === 'number') privateMb = Math.round(info.private / 1024)
+    }
+    return { rssMb, privateMb }
   })
 
   console.log('')
@@ -181,6 +186,7 @@ try {
   console.log(`  worst frame       ${worst.toFixed(2)}ms`)
   console.log(`  stalls over ${STALL_MS}ms  ${stalls}`)
   console.log(`  main process rss  ${memory.rssMb}MB`)
+  if (memory.privateMb !== null) console.log(`  private memory    ${memory.privateMb}MB`)
   console.log(`  interaction rounds ${round}`)
   console.log('')
 

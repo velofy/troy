@@ -1,8 +1,10 @@
 import { describe, it, expect, afterAll } from 'vitest'
 import http from 'node:http'
+import { createServer } from 'node:net'
 import type { Socket } from 'node:net'
 import type { AddressInfo } from 'node:net'
-import { launchHeadless, listenerCountForTests } from '../src/cdp/playwright.js'
+import { chromium } from 'playwright'
+import { launchHeadless, listenerCountForTests, connectOverWs } from '../src/cdp/playwright.js'
 
 const cdp = await launchHeadless()
 afterAll(() => cdp.close())
@@ -80,5 +82,38 @@ describe('PlaywrightCdp', () => {
     expect(listenerCountForTests(cdp, 'Page.loadEventFired')).toBe(1)
     unsubscribe()
     expect(listenerCountForTests(cdp, 'Page.loadEventFired')).toBe(0)
+  })
+
+  it('reports the committed url after a same-document hash change', async () => {
+    await cdp.send('Page.navigate', { url: `http://127.0.0.1:${fixturePort}/loads` })
+    await cdp.send('Page.navigate', { url: `http://127.0.0.1:${fixturePort}/loads#section` })
+    expect(await cdp.url()).toBe(`http://127.0.0.1:${fixturePort}/loads#section`)
+  })
+
+  it('disconnects the client without closing the browser on connectOverWs close', async () => {
+    const port = await new Promise<number>((resolve) => {
+      const probe = createServer()
+      probe.listen(0, '127.0.0.1', () => {
+        const chosen = (probe.address() as AddressInfo).port
+        probe.close(() => resolve(chosen))
+      })
+    })
+    const browser = await chromium.launch({
+      headless: true,
+      args: [`--remote-debugging-port=${port}`],
+    })
+    try {
+      for (let i = 0; i < 4; i++) {
+        const remote = await connectOverWs(`http://127.0.0.1:${port}`)
+        await remote.send('Page.navigate', { url: 'data:text/html,<title>attached</title>' })
+        expect(await remote.url()).toContain('data:text/html')
+        await remote.close()
+      }
+      const remote = await connectOverWs(`http://127.0.0.1:${port}`)
+      expect(await remote.url()).toBeTruthy()
+      await remote.close()
+    } finally {
+      await browser.close()
+    }
   })
 })
