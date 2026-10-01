@@ -1,5 +1,8 @@
 <p align="center">
-  <img src="assets/logo.svg" alt="Troy logo: an aperture between two crop marks" width="72" height="72">
+  <a href="https://velofy.co/troy/"><picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/velofy/troy/main/assets/tile-dark.svg">
+    <img alt="Troy" src="https://raw.githubusercontent.com/velofy/troy/main/assets/tile-light.svg" width="360">
+  </picture></a>
 </p>
 
 <h1 align="center">troy</h1>
