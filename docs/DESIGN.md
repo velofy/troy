@@ -333,9 +333,6 @@ on demand, Tesseract elsewhere, and the caller never picks.
 
 ## 10. Known gaps
 
-- **`rememberHistory` does nothing.** The setting is stored, toggled and shown,
-  but no module reads it and no history is written. Build the store or hide the
-  control.
 - **No Intel Mac behavioural coverage.** Packaged and launched under Rosetta,
   not exercised on Intel hardware.
 - **Extensions have no UI.** They load; nothing lists them.

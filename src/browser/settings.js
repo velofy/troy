@@ -18,6 +18,8 @@ import path from 'node:path'
  * @property {boolean} rememberHistory
  * @property {boolean} blockTrackers
  * @property {string} searchEngine
+ * @property {string} agentProvider
+ * @property {string} agentModel
  */
 
 /** @returns {Settings} */
@@ -27,6 +29,8 @@ export function defaults() {
     rememberHistory: false,
     blockTrackers: true,
     searchEngine: 'google',
+    agentProvider: 'anthropic',
+    agentModel: 'claude-opus-5',
   }
 }
 
@@ -61,6 +65,8 @@ export function readSettings(file) {
     rememberHistory: typeof stored.rememberHistory === 'boolean' ? stored.rememberHistory : base.rememberHistory,
     blockTrackers: typeof stored.blockTrackers === 'boolean' ? stored.blockTrackers : base.blockTrackers,
     searchEngine: typeof stored.searchEngine === 'string' && stored.searchEngine ? stored.searchEngine : base.searchEngine,
+    agentProvider: typeof stored.agentProvider === 'string' && stored.agentProvider ? stored.agentProvider : base.agentProvider,
+    agentModel: typeof stored.agentModel === 'string' && stored.agentModel ? stored.agentModel : base.agentModel,
   }
 }
 

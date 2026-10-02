@@ -9,13 +9,26 @@
 <p align="center">
   <a href="https://anishfyi.com/troy/">anishfyi.com/troy</a>
   &nbsp;·&nbsp;
-  <a href="https://github.com/anishfyi/troy/releases/latest">download</a>
+  <a href="https://github.com/velofy/troy/releases/latest">download</a>
   &nbsp;·&nbsp;
   <a href="docs/PRD.md">PRD</a>
   &nbsp;·&nbsp;
   <a href="docs/DESIGN.md">design</a>
   &nbsp;·&nbsp;
   MIT
+</p>
+
+---
+
+<h3 align="center">Sponsors</h3>
+
+<p align="center">
+  <a href="https://nodemaven.com/?a_aid=veronika&utm_source=veronika&utm_medium=affiliate&utm_campaign=troy_readme_sep2026&utm_term=github" title="NodeMaven - residential and mobile proxies">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/velofy/troy/main/assets/sponsors/nodemaven-dark.svg">
+      <img src="https://raw.githubusercontent.com/velofy/troy/main/assets/sponsors/nodemaven-light.svg" alt="NodeMaven" height="40">
+    </picture>
+  </a>
 </p>
 
 ---
@@ -28,9 +41,10 @@ automating are behind a login, so the fresh browser is the wrong browser. Troy
 inverts that: you browse in it, and an agent joins the session you already have.
 
 > **Status.** The browser is real, installable, and tested on macOS, Windows and
-> Linux. The reading pipeline this project is named for, which fuses DOM
-> structure with OCR of the regions the DOM cannot explain, is **not built yet**.
-> Until it lands the agent panel reads a page from the DOM alone. See
+> Linux. The live reading pipeline now settles the page, extracts visible DOM
+> structure, finds regions the DOM cannot explain, and fuses the result. A real
+> OCR backend is not wired in yet, so pixel-only regions are reported honestly
+> as untranscribed instead of being silently omitted. See
 > [What is not built](#what-is-not-built).
 
 ## Install
@@ -43,10 +57,10 @@ Or take a file directly:
 
 | | |
 |---|---|
-| macOS, Apple silicon | [Troy-mac-arm64.dmg](https://github.com/anishfyi/troy/releases/latest/download/Troy-mac-arm64.dmg) |
-| macOS, Intel | [Troy-mac-x64.dmg](https://github.com/anishfyi/troy/releases/latest/download/Troy-mac-x64.dmg) |
-| Windows, installer | [Troy-windows-setup-x64.exe](https://github.com/anishfyi/troy/releases/latest/download/Troy-windows-setup-x64.exe) |
-| Windows, portable | [Troy-windows-portable-x64.exe](https://github.com/anishfyi/troy/releases/latest/download/Troy-windows-portable-x64.exe) |
+| macOS, Apple silicon | [Troy-mac-arm64.dmg](https://github.com/velofy/troy/releases/latest/download/Troy-mac-arm64.dmg) |
+| macOS, Intel | [Troy-mac-x64.dmg](https://github.com/velofy/troy/releases/latest/download/Troy-mac-x64.dmg) |
+| Windows, installer | [Troy-windows-setup-x64.exe](https://github.com/velofy/troy/releases/latest/download/Troy-windows-setup-x64.exe) |
+| Windows, portable | [Troy-windows-portable-x64.exe](https://github.com/velofy/troy/releases/latest/download/Troy-windows-portable-x64.exe) |
 
 Troy is ad-hoc signed but not notarised, and there are no plans to be. Downloaded
 by hand that costs you one gesture on first launch: Control-click then Open on
@@ -64,10 +78,22 @@ unrestricted control of every tab you are signed into.
 open -a Troy --args --cdp-port=9333     # or: npm run browser -- --cdp-port=9333
 ```
 
-Troy then writes where it is, so nothing has to be copied between terminals:
+An agent launch must not take your screen. Any launch that asks for the port
+comes up **inactive** — the window appears, but the app you were working in
+keeps focus. `--hidden` goes further and shows nothing until you click the
+dock icon; `--foreground` opts back into normal behaviour. `TROY_LAUNCH` takes
+the same values for launches that cannot pass argv.
+
+Troy then writes where it is, so nothing has to be copied between terminals.
+The endpoint file lives under Troy's application-data directory:
 
 ```sh
+# macOS
 cat "$HOME/Library/Application Support/Troy/agent-endpoint.json"
+# Linux
+cat "${XDG_CONFIG_HOME:-$HOME/.config}/Troy/agent-endpoint.json"
+# Windows PowerShell
+Get-Content "$env:APPDATA\Troy\agent-endpoint.json"
 # { "port": 9333, "httpEndpoint": "http://127.0.0.1:9333", ... }
 ```
 
@@ -132,26 +158,28 @@ percentile frame misses budget, or if any frame stalls past 100ms.
 
 ## What is not built
 
-The read pipeline, which is the thing the name is about:
+The live tab already runs the settle, extract, cover, transcribe, and fuse
+pipeline. The remaining reading and action gaps are narrower:
 
-- **settle, extract, cover, ocr, fuse.** Take structure from the DOM and pixels
-  from OCR, deciding by itself which regions need which, so a plain article
-  costs zero OCR and a canvas dashboard gets its numbers read
-- `troy read <url>` as a CLI, markdown or `--json`
-- Apple Vision on macOS, Tesseract elsewhere, behind one interface
-- the verified action layer ported from `scripts/*.mjs` to TypeScript
+- Apple Vision on macOS and Tesseract elsewhere behind the existing OCR
+  interface. Until then, pixel-only regions are marked untranscribed.
+- A packaged `troy read <url>` executable. Developers can already run
+  `node scripts/read.mjs [--url <url>] [--json]` from a checkout.
+- The verified action layer ported from `scripts/*.mjs` to TypeScript.
 
-[`docs/DESIGN.md` §9](docs/DESIGN.md) describes the pipeline, and
-[the original spec](docs/superpowers/specs/2026-08-07-troy-design.md) has it in
-full. Treat both as intent, not as documentation of behaviour that exists.
+[`docs/DESIGN.md` §9](docs/DESIGN.md) describes the pipeline architecture, and
+[the original spec](docs/superpowers/specs/2026-08-07-troy-design.md) records
+its full intended shape. Sections that still call the whole pipeline planned
+are historical and should not override the running code in `src/read/` and
+`src/browser/readPort.js`.
 
 Also deliberately absent for now: omnibox suggestions, bookmarks, find-in-page,
 context menus, tab reordering, and any browser engine other than Chromium.
 
-One thing worth calling out because it is a live gap rather than a plan: the
-**Remember history** switch on the new tab page stores and toggles, but nothing
-reads it yet, so turning it on records nothing. See
-[`docs/PRD.md` §9](docs/PRD.md).
+**Remember history** on the new tab page is real: turn it on and visits are
+recorded to `history.json` in the profile, newest first, capped at 500.
+Turn it off and the file is deleted. It feeds the command palette's results
+and nothing else.
 
 ## Documents
 

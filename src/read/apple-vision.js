@@ -26,7 +26,7 @@ import path from 'node:path'
 // The whole helper. Boxes come out of Vision normalized with the origin at
 // the bottom left; the helper flips and scales them into top-left image
 // pixels so the JavaScript side never needs to know Vision's conventions.
-const SWIFT_SOURCE = `import Foundation
+export const SWIFT_SOURCE = `import Foundation
 import Vision
 import AppKit
 
@@ -98,10 +98,13 @@ async function exists(file) {
  * from here is what makes available() answer false instead of the
  * pipeline finding out the hard way later.
  *
+ * @param {{ binaryPath?: string, allowCompile?: boolean }} [opts]
  * @returns {Promise<string | null>}
  */
-async function ensureHelper() {
+async function ensureHelper(opts = {}) {
   if (process.platform !== 'darwin') return null
+  if (opts.binaryPath && await exists(opts.binaryPath)) return opts.binaryPath
+  if (opts.allowCompile === false) return null
   try {
     await run('swiftc', ['--version'], 15000)
   } catch {
@@ -130,13 +133,14 @@ async function ensureHelper() {
  * process lifetime so concurrent reads do not race two compiles into the
  * same cache directory.
  *
+ * @param {{ binaryPath?: string, allowCompile?: boolean }} [opts]
  * @returns {OcrEngine}
  */
-export function appleVisionEngine() {
+export function appleVisionEngine(opts = {}) {
   /** @type {Promise<string | null> | null} */
   let helper = null
   const helperPath = () => {
-    if (!helper) helper = ensureHelper()
+    if (!helper) helper = ensureHelper(opts)
     return helper
   }
   return {

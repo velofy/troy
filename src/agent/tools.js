@@ -10,13 +10,14 @@
 //   shipping megabytes of page into a model context is its own accident.
 //
 // Tools are marked gated (navigate, click, fill, select) or free (read,
-// text, scrape).
-// The gate is not enforced here: run() executes what it is told. Consent is
-// the caller's job (the panel asks; tests pass a scripted gate), because a
-// gate inside the tool layer would be untestable without Electron.
+// text, scrape). The application supplies deterministic policy authorization;
+// legacy CLI callers may still supply their own gate around this layer.
+
+import { ELEMENT_DESCRIPTOR_EXPRESSION } from './element-descriptor.js'
 
 /** Result payloads larger than this are cut and flagged. */
 export const MAX_TOOL_RESULT_CHARS = 20000
+export const MAX_INTERACTIVE_ELEMENTS = 300
 
 /** Text that reads like committing something. Clicking one of these is how
  * an order gets placed, so the answer is no before any heuristic runs. */
@@ -63,11 +64,11 @@ function capResult(result) {
       note: `result was longer than ${MAX_TOOL_RESULT_CHARS} characters and was truncated`,
     }
   }
-  return {
-    ...result,
+  return /** @type {T} */ ({
+    content: text.slice(0, budget),
     truncated: true,
-    note: `result was longer than ${MAX_TOOL_RESULT_CHARS} characters and was truncated`,
-  }
+    note: `result was longer than ${MAX_TOOL_RESULT_CHARS} characters and was truncated to a JSON preview`,
+  })
 }
 
 /** Expressions the click and fill tools evaluate against the live page. */
@@ -77,27 +78,8 @@ const INSPECT_EXPRESSION = `(expr) => (() => {
   if (expr.within && !scope) return JSON.stringify({ scopeMissing: expr.within })
   let matches
   try { matches = scope.querySelectorAll(expr.selector) } catch { return JSON.stringify({ count: 0, items: [], badSelector: true }) }
-  const items = []
-  for (const el of Array.from(matches).slice(0, 5)) {
-    const tag = el.tagName.toLowerCase()
-    const type = tag === 'input' ? (el.getAttribute('type') || 'text') : ''
-    items.push({
-      tag,
-      type,
-      name: el.getAttribute('name') || '',
-      text: (el.innerText || el.value || '').trim().slice(0, 120),
-      value: type === 'password' ? '' : String(el.value ?? ''),
-      disabled: Boolean(el.disabled),
-      // Same rule as page_read: only a form behind the button makes it a
-      // submitter. An orphan typeless button cannot commit anything.
-      defaultSubmit: ((tag === 'button' && !type) || type === 'submit') &&
-        Boolean(el.closest('form')),
-      editable: tag === 'textarea' || el.isContentEditable === true ||
-        (tag === 'input' && !['button', 'submit', 'checkbox', 'radio', 'file', 'hidden', 'password', 'range'].includes(type)),
-      maxLength: el.maxLength >= 0 ? el.maxLength : null,
-      readOnly: Boolean(el.readOnly),
-    })
-  }
+  const describe = ${ELEMENT_DESCRIPTOR_EXPRESSION}
+  const items = Array.from(matches).slice(0, 5).map(describe)
   return JSON.stringify({ count: matches.length, items })
 })()`
 
@@ -202,31 +184,83 @@ const TEXT_EXPRESSION = `(sel) => (() => {
 /**
  * @typedef {object} ToolHost
  * @property {() => Promise<unknown>} read full page facts for the active tab
+ * @property {() => Promise<unknown>} [readVisual] fused DOM/OCR read
  * @property {(expression: string) => Promise<unknown>} evaluate run JS in the page
  * @property {(input: string) => { kind: string, url?: string, reason?: string }} resolve omnibox resolver
  * @property {(url: string) => Promise<unknown>} load navigate the tab
  * @property {(cmd: string, args: string[]) => Promise<{ code?: number, stdout?: string, stderr?: string } | { missing: string }>} exec run a subprocess
  * @property {() => Promise<void>} settle wait for the page to stop moving
+ * @property {() => { tabId: number, url: string, epoch: number }} [context] current element capability context
+ * @property {() => void} [invalidate] invalidate the page/document epoch
  */
 
 /**
  * @param {ToolHost} host
+ * @param {{
+ *   elements?: import('./elements.js').ElementRegistry,
+ *   authorize?: (request: { name: string, item?: Record<string, any>, targetUrl?: string }) => import('./policy.js').PolicyDecision,
+ *   includeScrape?: boolean,
+ *   signal?: AbortSignal,
+ * }} options
  * @returns {{ specs: ToolSpec[], run: (name: string, args?: any) => Promise<Record<string, unknown>> }}
  */
-export function createTools(host) {
+export function createTools(host, options = {}) {
+  function assertNotAborted() {
+    if (!options.signal?.aborted) return
+    const error = options.signal.reason instanceof Error ? options.signal.reason : new Error('the agent run was cancelled')
+    error.name = 'AbortError'
+    throw error
+  }
+
+  /** @param {ReturnType<NonNullable<typeof options.authorize>>} decision */
+  function refusal(decision) {
+    if (decision.allowed) return null
+    return {
+      error: decision.reason,
+      blocked: true,
+      boundary: decision.status === 'boundary',
+      code: decision.code,
+      origin: decision.origin,
+    }
+  }
+
   /**
    * Evaluate and parse a JSON-returning expression. Over CDP the page hands
    * back a JSON string; scripted hosts in tests hand objects straight
    * through, so both spellings are accepted at this one seam.
    */
   async function evalJson(/** @type {string} */ expression) {
+    assertNotAborted()
     const raw = await host.evaluate(expression)
+    assertNotAborted()
     if (typeof raw === 'string') return JSON.parse(raw)
     return raw
   }
 
   async function pageRead() {
-    return capResult(await host.read())
+    assertNotAborted()
+    const result = /** @type {Record<string, any>} */ (await host.read())
+    if (Array.isArray(result.interactive)) {
+      const reported = result.interactive.length
+      result.interactive = result.interactive.slice(0, MAX_INTERACTIVE_ELEMENTS)
+      if (options.elements && host.context) {
+        result.interactive = options.elements.register(result.interactive, host.context())
+      }
+      while (result.interactive.length > 1 && JSON.stringify(result).length > MAX_TOOL_RESULT_CHARS) {
+        result.interactive = result.interactive.slice(0, Math.ceil(result.interactive.length / 2))
+      }
+      if (reported > result.interactive.length || result.interactiveTruncated) {
+        result.interactiveTruncated = true
+        result.note = `interactive elements were limited to ${result.interactive.length}; refine the page before acting on controls not listed`
+      }
+    }
+    return capResult(result)
+  }
+
+  async function pageReadVisual() {
+    if (!host.readVisual) return { error: 'visual page reading is unavailable in this host' }
+    assertNotAborted()
+    return capResult(await host.readVisual())
   }
 
   async function pageNavigate(/** @type {any} */ args) {
@@ -240,8 +274,15 @@ export function createTools(host) {
         return { error: `${resolved.url} opens in another application, which the agent may not launch` }
       case 'url':
       case 'search': {
+        if (options.authorize) {
+          const denied = refusal(options.authorize({ name: 'page_navigate', targetUrl: resolved.url ?? '' }))
+          if (denied) return denied
+        }
+        assertNotAborted()
         await host.load(resolved.url ?? '')
         await host.settle()
+        options.elements?.invalidate()
+        host.invalidate?.()
         return { ok: true, kind: resolved.kind, url: resolved.url }
       }
       default:
@@ -255,33 +296,53 @@ export function createTools(host) {
    * change the page.
    */
   async function inspectOne(/** @type {any} */ args) {
+    let selector = String(args.selector ?? '')
+    let expected = null
+    if (options.elements) {
+      if (!host.context) return { error: 'this host cannot resolve element references' }
+      const resolved = options.elements.resolve(args.ref, host.context())
+      if ('error' in resolved) return resolved
+      selector = resolved.selector
+      expected = resolved.item
+    }
     const inspection = await evalJson(
-      `(${INSPECT_EXPRESSION})(${JSON.stringify({ selector: args.selector, within: args.within })})`,
+      `(${INSPECT_EXPRESSION})(${JSON.stringify({ selector, within: options.elements ? undefined : args.within })})`,
     )
+    const label = options.elements ? String(args.ref ?? 'that element') : selector
     if (inspection.scopeMissing) {
       return { error: `the scope container ${inspection.scopeMissing} matched nothing; refusing to act outside it` }
     }
     if (inspection.badSelector) {
-      return { error: `nothing matched ${args.selector} (the selector itself failed to compile)` }
+      return { error: `${label} no longer has a usable selector; read the page again` }
     }
     if (inspection.count === 0) {
-      return { error: `nothing matched ${args.selector}; refusing to guess` }
+      return { error: `nothing matched ${label}; refusing to guess` }
     }
     if (inspection.count > 1) {
       const summaries = inspection.items
         .map((/** @type {InspectItem} */ item) => `<${item.tag}> ${item.text || item.name || item.type}`.trim())
         .join('; ')
-      return { error: `${inspection.count} elements matched ${args.selector}: ${summaries}. Refusing to choose among them; narrow the selector or add a within container.` }
+      return { error: `${inspection.count} elements matched ${label}: ${summaries}. Refusing to choose among them; read the page again.` }
     }
-    return { item: inspection.items[0] }
+    const current = inspection.items[0]
+    if (expected?.signature && current.signature !== expected.signature) {
+      options.elements?.invalidate()
+      return { error: `${label} now points to a different control; read the page again` }
+    }
+    return { item: current, selector }
   }
 
   async function pageClick(/** @type {any} */ args) {
     const found = await inspectOne(args)
-    if (found.error) return found
+    if ('error' in found) return found
     const item = /** @type {InspectItem} */ (found.item)
+    const selector = String(found.selector ?? args.selector ?? '')
     if (item.disabled) return { error: `that control is disabled` }
     if (item.type === 'password') return { error: 'password fields are never operated by the agent' }
+    if (options.authorize) {
+      const denied = refusal(options.authorize({ name: 'page_click', item }))
+      if (denied) return denied
+    }
     if (SUBMIT_PATTERN.test(item.text)) {
       return { error: `"${item.text}" reads like a submit or commit action, which is always yours to click` }
     }
@@ -290,9 +351,17 @@ export function createTools(host) {
     }
 
     const before = await evalJson(SNAPSHOT_EXPRESSION)
-    await host.evaluate(`(${CLICK_EXPRESSION})(${JSON.stringify(args.selector)})`)
+    assertNotAborted()
+    await host.evaluate(`(${CLICK_EXPRESSION})(${JSON.stringify(selector)})`)
     await host.settle()
     const after = await evalJson(SNAPSHOT_EXPRESSION)
+    options.elements?.invalidate()
+    host.invalidate?.()
+
+    if (options.authorize && host.context) {
+      const boundary = refusal(options.authorize({ name: 'page_navigate', targetUrl: host.context().url }))
+      if (boundary) return boundary
+    }
 
     const reasons = diffSnapshots(before, after)
     if (reasons.length === 0) {
@@ -316,9 +385,14 @@ export function createTools(host) {
     }
 
     const found = await inspectOne(args)
-    if (found.error) return found
+    if ('error' in found) return found
     const item = /** @type {InspectItem} */ (found.item)
+    const selector = String(found.selector ?? args.selector ?? '')
     if (item.type === 'password') return { error: 'password fields are never filled by the agent' }
+    if (options.authorize) {
+      const denied = refusal(options.authorize({ name: 'page_fill', item }))
+      if (denied) return denied
+    }
     // Text-input-ness is judged from what the element IS, not from a single
     // reported flag: an input of a text-like type, a textarea, or anything
     // contenteditable counts. A bare div does not.
@@ -334,10 +408,13 @@ export function createTools(host) {
       return { error: `the answer is ${text.length} characters but the field allows ${item.maxLength}; refusing to write an answer that would be silently truncated` }
     }
 
-    await host.evaluate(`(${FILL_EXPRESSION})(${JSON.stringify({ selector: args.selector, text })})`)
+    assertNotAborted()
+    await host.evaluate(`(${FILL_EXPRESSION})(${JSON.stringify({ selector, text })})`)
     await host.settle()
-    const rawBack = await host.evaluate(`(${READBACK_EXPRESSION})(${JSON.stringify(args.selector)})`)
+    const rawBack = await host.evaluate(`(${READBACK_EXPRESSION})(${JSON.stringify(selector)})`)
     const landed = typeof rawBack === 'string' ? rawBack : String(rawBack ?? '')
+    options.elements?.invalidate()
+    host.invalidate?.()
     if (landed !== text) {
       return {
         ok: false,
@@ -369,21 +446,28 @@ export function createTools(host) {
     }
 
     const found = await inspectOne(args)
-    if (found.error) return found
+    if ('error' in found) return found
     const item = /** @type {InspectItem} */ (found.item)
+    const selector = String(found.selector ?? args.selector ?? '')
     if (item.disabled) return { error: 'that control is disabled' }
+    if (options.authorize) {
+      const denied = refusal(options.authorize({ name: 'page_select', item }))
+      if (denied) return denied
+    }
     if (item.tag !== 'select') {
       return { error: `<${item.tag}> is not a dropdown; page_select only operates <select> elements` }
     }
 
-    const act = await evalJson(`(${SELECT_EXPRESSION})(${JSON.stringify({ selector: args.selector, value })})`)
+    const act = await evalJson(`(${SELECT_EXPRESSION})(${JSON.stringify({ selector, value })})`)
     if (!act.acted) {
       const listed = (act.options ?? []).map((/** @type {any} */ o) => o.label || o.value).join(', ')
       return { error: `no option matched "${value}". The options are: ${listed}` }
     }
     await host.settle()
-    const rawBack = await host.evaluate(`(${SELECT_READBACK_EXPRESSION})(${JSON.stringify(args.selector)})`)
+    const rawBack = await host.evaluate(`(${SELECT_READBACK_EXPRESSION})(${JSON.stringify(selector)})`)
     const landed = typeof rawBack === 'string' ? rawBack : String(rawBack ?? '')
+    options.elements?.invalidate()
+    host.invalidate?.()
     if (landed !== act.label) {
       return {
         ok: false,
@@ -394,18 +478,25 @@ export function createTools(host) {
   }
 
   async function pageText(/** @type {any} */ args) {
-    if (!String(args.selector ?? '').trim()) {
-      return { error: 'no selector given' }
+    let selector = String(args.selector ?? '').trim()
+    let label = selector
+    if (options.elements) {
+      if (!host.context) return { error: 'this host cannot resolve element references' }
+      const resolved = options.elements.resolve(args.ref, host.context())
+      if ('error' in resolved) return resolved
+      selector = resolved.selector
+      label = String(args.ref ?? '')
     }
-    const read = await evalJson(`(${TEXT_EXPRESSION})(${JSON.stringify(String(args.selector))})`)
+    if (!selector) return { error: options.elements ? 'no element reference given' : 'no selector given' }
+    const read = await evalJson(`(${TEXT_EXPRESSION})(${JSON.stringify(selector)})`)
     if (read.badSelector) {
-      return { error: `${args.selector} is not a usable selector` }
+      return { error: options.elements ? `${label} is no longer usable; read the page again` : `${label} is not a usable selector` }
     }
     if (read.count === 0) {
-      return { error: `nothing matched ${args.selector}; refusing to guess` }
+      return { error: `nothing matched ${label}; refusing to guess` }
     }
     if (read.count > 1) {
-      return { error: `${read.count} elements matched ${args.selector}. Refusing to choose among them; narrow the selector or add a within container.` }
+      return { error: `${read.count} elements matched ${label}. Refusing to choose among them; read the page again.` }
     }
     return {
       ok: true,
@@ -448,52 +539,78 @@ export function createTools(host) {
     page_click: pageClick,
     page_fill: pageFill,
     page_select: pageSelect,
-    page_scrape: pageScrape,
   }
+  if (host.readVisual) tools.page_read_visual = pageReadVisual
+  if (options.includeScrape !== false) tools.page_scrape = pageScrape
+
+  const elementKey = options.elements ? 'ref' : 'selector'
+  const elementProperty = options.elements
+    ? { ref: { type: 'string', description: 'opaque element reference returned by the latest page_read' } }
+    : { selector: { type: 'string' } }
 
   /** @type {ToolSpec[]} */
   const specs = [
     {
       name: 'page_read',
-      description: 'Read facts about the active tab: title, counts, a text preview, and every interactive element with a unique selector. Read this before acting; only use selectors it gave you.',
+      description: options.elements
+        ? 'Read facts about the active tab and its interactive elements. Read before acting; use only the opaque element refs returned by the latest read.'
+        : 'Read facts about the active tab: title, counts, a text preview, and every interactive element with a unique selector. Read this before acting; only use selectors it gave you.',
       gated: false,
       input: { type: 'object', properties: {} },
     },
-    {
-      name: 'page_scrape',
-      description: 'Fetch one https address over plain HTTP through curl_reap, without rendering it. For reading pages fast or past clients that block automation.',
-      gated: false,
-      input: { type: 'object', properties: { url: { type: 'string', description: 'https address to fetch' } }, required: ['url'] },
-    },
+    ...(host.readVisual
+      ? [{
+          name: 'page_read_visual',
+          description: 'Read the page through Troy\'s fused DOM and OCR pipeline when canvas, images or visual regions matter.',
+          gated: false,
+          input: { type: 'object', properties: {} },
+        }]
+      : []),
+    ...(options.includeScrape !== false
+      ? [{
+          name: 'page_scrape',
+          description: 'Fetch one https address over plain HTTP through curl_reap, without rendering it. For reading pages fast or past clients that block automation.',
+          gated: false,
+          input: { type: 'object', properties: { url: { type: 'string', description: 'https address to fetch' } }, required: ['url'] },
+        }]
+      : []),
     {
       name: 'page_text',
-      description: 'Read the exact visible text of one element by selector. Use when page_read\'s preview is not enough and you need a specific section, table or paragraph.',
+      description: options.elements
+        ? 'Read the exact visible text of one element using a ref from the latest page_read.'
+        : 'Read the exact visible text of one element by selector. Use when page_read\'s preview is not enough and you need a specific section, table or paragraph.',
       gated: false,
-      input: { type: 'object', properties: { selector: { type: 'string' } }, required: ['selector'] },
+      input: { type: 'object', properties: elementProperty, required: [elementKey] },
     },
     {
       name: 'page_navigate',
-      description: 'Navigate the tab to an address or search phrase, through the same rules as the address bar. Refused schemes stay refused.',
+      description: 'Navigate the tab to an address or search phrase through the same rules as the address bar and this session\'s exact-origin scope.',
       gated: true,
       input: { type: 'object', properties: { url: { type: 'string', description: 'address or search phrase' } }, required: ['url'] },
     },
     {
       name: 'page_click',
-      description: 'Click one element by selector. Submit-shaped controls are refused; the click must observably change the page or it reports NOT VERIFIED.',
+      description: options.elements
+        ? 'Click one element ref from the latest page_read. Irreversible controls are blocked and the ref expires after the action.'
+        : 'Click one element by selector. Submit-shaped controls are refused; the click must observably change the page or it reports NOT VERIFIED.',
       gated: true,
-      input: { type: 'object', properties: { selector: { type: 'string' }, within: { type: 'string', description: 'optional container to scope the selector' } }, required: ['selector'] },
+      input: { type: 'object', properties: options.elements ? elementProperty : { ...elementProperty, within: { type: 'string', description: 'optional container to scope the selector' } }, required: [elementKey] },
     },
     {
       name: 'page_fill',
-      description: 'Type text into one input by selector, then read it back to verify. Password fields and over-maxlength answers are refused.',
+      description: options.elements
+        ? 'Fill one ordinary text field ref from the latest page_read, then verify it. Sensitive fields are blocked and the ref expires after the action.'
+        : 'Type text into one input by selector, then read it back to verify. Password fields and over-maxlength answers are refused.',
       gated: true,
-      input: { type: 'object', properties: { selector: { type: 'string' }, text: { type: 'string' } }, required: ['selector', 'text'] },
+      input: { type: 'object', properties: { ...elementProperty, text: { type: 'string' } }, required: [elementKey, 'text'] },
     },
     {
       name: 'page_select',
-      description: 'Choose one option of a <select> dropdown, matched by the option\'s label or value, then read the selection back to verify. The full option list is reported when nothing matches.',
+      description: options.elements
+        ? 'Choose an option in one select ref from the latest page_read, then verify it. The ref expires after the action.'
+        : 'Choose one option of a <select> dropdown, matched by the option\'s label or value, then read the selection back to verify. The full option list is reported when nothing matches.',
       gated: true,
-      input: { type: 'object', properties: { selector: { type: 'string' }, value: { type: 'string', description: 'option label or value to select' } }, required: ['selector', 'value'] },
+      input: { type: 'object', properties: { ...elementProperty, value: { type: 'string', description: 'option label or value to select' } }, required: [elementKey, 'value'] },
     },
   ]
 
@@ -503,9 +620,16 @@ export function createTools(host) {
       const tool = tools[name]
       if (!tool) return { error: `unknown tool ${name}` }
       try {
-        return capResult(await tool(args ?? {}))
+        assertNotAborted()
+        const result = await tool(args ?? {})
+        assertNotAborted()
+        return capResult(result)
       } catch (err) {
-        return { error: String(/** @type {Error} */ (err)?.message ?? err) }
+        const error = /** @type {Error} */ (err)
+        if (error?.name === 'AbortError' || options.signal?.aborted) {
+          return { error: 'the agent run was cancelled', cancelled: true }
+        }
+        return { error: String(error?.message ?? err) }
       }
     },
   }
