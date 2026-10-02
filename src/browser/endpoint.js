@@ -15,12 +15,14 @@ import path from 'node:path'
 
 /**
  * @typedef {object} Endpoint
- * @property {number} port
+ * @property {number} port the CDP port, or 0 when only the agent socket is open
  * @property {string} webSocketDebuggerUrlHint
  * @property {string} httpEndpoint
  * @property {number} pid
  * @property {string} version
  * @property {string} startedAt
+ * @property {number} [agentPort] the typed agent socket; absent when not open
+ * @property {string} [agentToken] bearer for the agent socket, per launch
  */
 
 /**
@@ -36,22 +38,26 @@ export function endpointFile(userDataDir) {
 
 /**
  * @param {object} options
- * @param {number} options.port
+ * @param {number} options.port the CDP port; 0 when only the agent socket runs
  * @param {number} options.pid
  * @param {string} options.version
  * @param {Date} [options.now]
+ * @param {number} [options.agentPort]
+ * @param {string} [options.agentToken]
  * @returns {Endpoint}
  */
-export function describeEndpoint({ port, pid, version, now = new Date() }) {
+export function describeEndpoint({ port, pid, version, now = new Date(), agentPort, agentToken }) {
   return {
     port,
-    httpEndpoint: `http://127.0.0.1:${port}`,
+    httpEndpoint: port ? `http://127.0.0.1:${port}` : '',
     // The exact ws URL is per-target and changes with the tabs, so point at
     // the list rather than pretending one URL is stable.
-    webSocketDebuggerUrlHint: `http://127.0.0.1:${port}/json/list`,
+    webSocketDebuggerUrlHint: port ? `http://127.0.0.1:${port}/json/list` : '',
     pid,
     version,
     startedAt: now.toISOString(),
+    ...(agentPort ? { agentPort } : {}),
+    ...(agentToken ? { agentToken } : {}),
   }
 }
 

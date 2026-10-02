@@ -51,14 +51,14 @@ export function settleProbeExpression(reset) {
       }
     }
     if (${reset ? 'true' : 'false'}) { probe.quiet = 0; probe.last = '' }
+    const signature = () => {
+      const d = document.documentElement
+      const w2 = d ? d.scrollWidth : 0
+      const h2 = d ? d.scrollHeight : 0
+      return w2 + 'x' + h2 + 'x' + document.getElementsByTagName('*').length
+    }
     if (!probe.running && probe.quiet < 2) {
       probe.running = true
-      const signature = () => {
-        const d = document.documentElement
-        const w2 = d ? d.scrollWidth : 0
-        const h2 = d ? d.scrollHeight : 0
-        return w2 + 'x' + h2 + 'x' + document.getElementsByTagName('*').length
-      }
       const tick = () => {
         const s = signature()
         if (s === probe.last) probe.quiet += 1
@@ -69,10 +69,15 @@ export function settleProbeExpression(reset) {
       }
       w.requestAnimationFrame(tick)
     }
+    // The poll signature goes out too, because a backgrounded tab fires no
+    // animation frames at all: rAF quiet can never arrive for a page an agent
+    // is driving out of view, and the host side falls back to "identical
+    // signature across polls" in that case.
     return JSON.stringify({
       readyState: document.readyState,
       fontsReady: probe.fontsReady,
       quiet: probe.quiet,
+      sig: signature(),
     })
   })()`
 }
@@ -116,18 +121,27 @@ export async function settle(evaluate, opts = {}) {
   let fontsReady = false
   let quiet = 0
   let first = true
+  let lastSig = ''
+  let stablePolls = 0
 
   for (;;) {
     try {
       const raw = await evaluate(settleProbeExpression(first))
       first = false
-      const parsed = /** @type {{ readyState?: unknown, fontsReady?: unknown, quiet?: unknown }} */ (
+      const parsed = /** @type {{ readyState?: unknown, fontsReady?: unknown, quiet?: unknown, sig?: unknown }} */ (
         JSON.parse(String(raw))
       )
       readyState = String(parsed.readyState ?? '')
       fontsReady = Boolean(parsed.fontsReady)
       quiet = Number(parsed.quiet ?? 0)
-      if (readyState === 'complete' && fontsReady && quiet >= 2) {
+      const sig = String(parsed.sig ?? '')
+      if (sig && sig === lastSig) stablePolls += 1
+      else stablePolls = 0
+      lastSig = sig
+      // rAF quiet is the precise signal when frames run; identical layout
+      // signatures across three polls (pollMs apart) are the fallback for
+      // tabs that never get a frame, like agent-driven background tabs.
+      if (readyState === 'complete' && fontsReady && (quiet >= 2 || stablePolls >= 2)) {
         return { settled: true, elapsedMs: now() - started, readyState, fontsReady, quietFrames: quiet }
       }
     } catch {

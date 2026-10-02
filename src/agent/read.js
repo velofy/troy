@@ -10,7 +10,7 @@
 // does not go hunting), but its value never leaves the page. Ordinary fields
 // report their current value because "what did I already type" is useful.
 
-import { ELEMENT_DESCRIPTOR_EXPRESSION } from './element-descriptor.js'
+import { ELEMENT_DESCRIPTOR_EXPRESSION, SELECTOR_FOR_EXPRESSION } from './element-descriptor.js'
 
 /** Hard cap on the text preview, in characters. The full fused read lives
  * elsewhere; this is the model's working snapshot, not an archive. */
@@ -24,18 +24,8 @@ export const READ_PAGE_EXPRESSION = `(() => {
   const raw = (body.textContent || '').trim()
   const degraded = painted.length === 0 && raw.length > 0
 
-  // A stable, unique selector per element. An id wins outright; without one,
-  // the element's position among its tag siblings is the fallback, which
-  // survives styling changes that would break class names.
-  function selectorFor(el) {
-    if (el.id) return '#' + CSS.escape(el.id)
-    const parent = el.parentElement
-    if (!parent) return el.tagName.toLowerCase()
-    const sameTag = Array.from(parent.children).filter((c) => c.tagName === el.tagName)
-    const index = sameTag.indexOf(el) + 1
-    const base = selectorFor(parent)
-    return base + ' > ' + el.tagName.toLowerCase() + ':nth-of-type(' + index + ')'
-  }
+  // A stable, unique selector per element, shared with page_find.
+  const selectorFor = ${SELECTOR_FOR_EXPRESSION}
 
   const describe = ${ELEMENT_DESCRIPTOR_EXPRESSION}
 
