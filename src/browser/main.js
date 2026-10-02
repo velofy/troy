@@ -27,6 +27,8 @@ import { buildPaletteResults } from './palette.js'
 import { PROVIDERS, keysFile, setKey, getKey, keyStatus, clearKey } from '../agent/keys.js'
 import { DEFAULT_MODELS } from '../agent/llm.js'
 import { createAgentController } from './agentController.js'
+import { createAgentSocket } from './agentSocket.js'
+import { createMemory } from '../agent/memory.js'
 import { whisperAssets } from '../voice/whisper.js'
 import { transcribeLocalWav, MAX_VOICE_BYTES } from '../voice/transcribe.js'
 import { createOcrEngine } from '../read/ocr-factory.js'
@@ -129,6 +131,19 @@ if (cdpPort) {
  * step further and shows nothing until the app is activated. --foreground
  * opts back into ordinary behaviour.
  */
+/**
+ * The agent socket is the typed command surface a CLI agent talks to. It
+ * opens whenever the debugging port does — asking for CDP is asking for
+ * agent control — or on its own with --agent for callers that want the tool
+ * contract and not a bare DevTools port.
+ */
+const agentSocketWanted = Boolean(
+  cdpPort ||
+    process.argv.includes('--agent') ||
+    process.argv.includes('--agent-socket') ||
+    process.env.TROY_AGENT_SOCKET === '1',
+)
+
 const launchMode = readLaunchMode()
 if (launchMode === 'hidden') {
   // Hidden windows would otherwise have their rendering throttled, which
@@ -178,7 +193,7 @@ function readLaunchMode() {
   if (args.includes('--background') || args.includes('-g')) return 'background'
   const env = process.env.TROY_LAUNCH
   if (env === 'hidden' || env === 'background' || env === 'foreground') return env
-  if (cdpPort) return 'background'
+  if (agentSocketWanted) return 'background'
   return 'foreground'
 }
 
@@ -670,6 +685,7 @@ function agents() {
       if (!win || win.isDestroyed() || win.webContents.isDestroyed()) return
       win.webContents.send('agent:event', event)
     },
+    memory: memoryFacade,
   })
   return agentController
 }
@@ -1547,6 +1563,7 @@ ipcMain.handle(
     return {
       rememberHistory: current.rememberHistory,
       blockTrackers: current.blockTrackers,
+      agentMemory: current.agentMemory,
     }
   }),
 )
@@ -1555,7 +1572,7 @@ ipcMain.handle(
   'newtab:setting',
   newTabOnly((_e, /** @type {{key?: unknown, value?: unknown}} */ change) => {
     const key = String(change?.key ?? '')
-    if (key !== 'rememberHistory' && key !== 'blockTrackers') return settings()
+    if (key !== 'rememberHistory' && key !== 'blockTrackers' && key !== 'agentMemory') return settings()
     return updateSettings({ [key]: Boolean(change?.value) })
   }),
 )
@@ -1646,7 +1663,41 @@ function updateSettings(patch) {
     clearHistory(historyFile(app.getPath('userData')))
     historyCache = []
   }
+  if (before.agentMemory && !settingsCache.agentMemory) {
+    // Off means gone, the same rule history follows.
+    agentMemoryStore?.erase()
+    agentMemoryStore = null
+  }
   return settingsCache
+}
+
+/** @type {ReturnType<typeof createMemory> | null} */
+let agentMemoryStore = null
+let agentSocket = /** @type {{ port: number, token: string, close: () => Promise<void> } | null} */ (null)
+
+/**
+ * The memory store exists only while its setting is on. Held lazily so the
+ * file is never even touched for people who keep it off.
+ */
+function agentMemory() {
+  if (!settings().agentMemory) return null
+  if (!agentMemoryStore) {
+    agentMemoryStore = createMemory(path.join(app.getPath('userData'), 'agent-memory.json'))
+  }
+  return agentMemoryStore
+}
+
+/**
+ * The facade every tools host gets. It consults the setting at call time, so
+ * a toggle takes effect mid-run instead of at the next launch.
+ */
+const memoryFacade = {
+  recordRead: (/** @type {any} */ c, /** @type {any} */ r) => agentMemory()?.recordRead(c, r),
+  recordAction: (/** @type {any} */ e) => agentMemory()?.recordAction(e),
+  recall: (/** @type {string} */ q, /** @type {any} */ o) =>
+    agentMemory()?.recall(q, o) ?? { enabled: false, elements: [], pages: [], paths: [] },
+  forget: (/** @type {any} */ o) => agentMemory()?.forget(o) ?? { ok: true },
+  stats: () => agentMemory()?.stats() ?? { enabled: false },
 }
 
 /**
@@ -1734,13 +1785,6 @@ app.whenReady().then(async () => {
   const loaded = await loadExtensions(session.defaultSession, extensionsDir())
   if (loaded.length) console.log(`[troy] ${summarise(loaded)}`)
 
-  // Say where the agent bridge is, so nothing has to be copied by hand.
-  if (cdpPort) {
-    const file = endpointFile(app.getPath('userData'))
-    writeEndpoint(file, describeEndpoint({ port: cdpPort, pid: process.pid, version: app.getVersion() }))
-    app.on('will-quit', () => clearEndpoint(file))
-  }
-
   if (process.platform === 'darwin' && app.dock) {
     const icon = appIcon()
     if (icon) app.dock.setIcon(icon)
@@ -1748,6 +1792,64 @@ app.whenReady().then(async () => {
 
   buildMenu()
   createWindow()
+
+  // The agent socket rides the same ask as the CDP port: either flag opens
+  // it, and it needs the window to exist before it can open tabs in it.
+  if (agentSocketWanted) {
+    try {
+      agentSocket = await createAgentSocket({
+        listTabs: () =>
+          [...tabs.values()].filter(alive).map((tab) => ({
+            id: tab.id,
+            url: tab.view.webContents.getURL(),
+            title: tabTitle(tab),
+            active: tab.id === activeTabId,
+            loading: tab.view.webContents.isLoading(),
+          })),
+        resolveTab: (id) => {
+          const tab = id === undefined ? tabs.get(activeTabId) : tabs.get(id)
+          return alive(tab) ? { id: tab.id, webContents: tab.view.webContents } : null
+        },
+        // A socket-opened tab stays in the background: the agent works in it,
+        // but what the person is looking at does not get swapped out from
+        // under them. /activate exists for when focus is the point.
+        openTab: (url) => {
+          if (!win || win.isDestroyed()) return null
+          const id = createTab(url ?? NEW_TAB_URL)
+          const tab = tabs.get(id)
+          if (alive(tab)) tab.view.setVisible(false)
+          return id
+        },
+        selectTab,
+        closeTab,
+        resolve: resolveNavigation,
+        ocr: selectedOcr(),
+        memory: memoryFacade,
+      })
+    } catch (err) {
+      console.error('[troy] the agent socket could not open:', err)
+    }
+    app.on('will-quit', () => {
+      agentSocket?.close().catch(() => {})
+      agentMemoryStore?.close()
+    })
+  }
+
+  // Say where the agent bridge is, so nothing has to be copied by hand.
+  if (cdpPort || agentSocket) {
+    const file = endpointFile(app.getPath('userData'))
+    writeEndpoint(
+      file,
+      describeEndpoint({
+        port: cdpPort ?? 0,
+        pid: process.pid,
+        version: app.getVersion(),
+        agentPort: agentSocket?.port,
+        agentToken: agentSocket?.token,
+      }),
+    )
+    app.on('will-quit', () => clearEndpoint(file))
+  }
 })
 
 app.on('window-all-closed', () => {

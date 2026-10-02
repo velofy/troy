@@ -84,6 +84,28 @@ keeps focus. `--hidden` goes further and shows nothing until you click the
 dock icon; `--foreground` opts back into normal behaviour. `TROY_LAUNCH` takes
 the same values for launches that cannot pass argv.
 
+### The agent socket and the `troy` CLI
+
+Every agent launch (or `--agent` alone, without a debugging port) opens the
+agent socket: a token-gated loopback endpoint that speaks the same tool
+contract the in-app agent uses — reads, ref-based actions, tab management and
+page memory, with the same refusals. `bin/troy.mjs` is the CLI on top of it:
+
+```sh
+troy status
+troy open https://example.com          # background tab; prints its id
+troy find "add to cart" --tab 2        # matching elements, as refs
+troy fill e4 "blue anorak" --tab 2
+troy act '[{"op":"click","ref":"e4"}]' --tab 2
+troy read --tab 2 --since              # only what changed since last read
+troy recall "checkout button"          # what this browser already learned
+```
+
+Element refs survive actions inside a document and die at navigation, which
+is the honest contract. `troy read --since` returns only what moved. `troy
+recall` answers from the page-memory graph (settings → "Remember what the
+agent learns", off by default) instead of making you re-read.
+
 Troy then writes where it is, so nothing has to be copied between terminals.
 The endpoint file lives under Troy's application-data directory:
 
@@ -94,11 +116,11 @@ cat "$HOME/Library/Application Support/Troy/agent-endpoint.json"
 cat "${XDG_CONFIG_HOME:-$HOME/.config}/Troy/agent-endpoint.json"
 # Windows PowerShell
 Get-Content "$env:APPDATA\Troy\agent-endpoint.json"
-# { "port": 9333, "httpEndpoint": "http://127.0.0.1:9333", ... }
+# { "port": 9333, "agentPort": 58893, "agentToken": "...", ... }
 ```
 
-Attach with anything that speaks CDP. This gives you the tabs already open, not
-a new browser:
+Attach with anything that speaks CDP for raw control — the agent socket for
+the tool contract. This gives you the tabs already open, not a new browser:
 
 ```js
 import { chromium } from 'playwright'

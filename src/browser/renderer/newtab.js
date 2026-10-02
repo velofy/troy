@@ -17,6 +17,7 @@ async function start() {
 
   document.getElementById('rememberHistory').checked = state.rememberHistory
   document.getElementById('blockTrackers').checked = state.blockTrackers
+  document.getElementById('agentMemory').checked = Boolean(state.agentMemory)
 
   settingsBtn.addEventListener('click', () => {
     const open = settingsEl.hidden
@@ -24,7 +25,7 @@ async function start() {
     settingsBtn.setAttribute('aria-expanded', String(open))
   })
 
-  for (const key of ['rememberHistory', 'blockTrackers']) {
+  for (const key of ['rememberHistory', 'blockTrackers', 'agentMemory']) {
     document.getElementById(key).addEventListener('change', (e) => {
       bridge.setSetting(key, e.target.checked)
     })

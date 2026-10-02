@@ -3,6 +3,23 @@
 
 import { SENSITIVE_DATA_PATTERN } from './policy.js'
 
+/**
+ * A stable, unique selector for one element, as an in-page named function
+ * expression (named so it can recurse). An id wins outright; without one the
+ * element's position among its tag siblings is the fallback, which survives
+ * styling changes that would break class names. Shared between the page_read
+ * walk and the page_find query, so both hand out selectors from one rule.
+ */
+export const SELECTOR_FOR_EXPRESSION = `(function selectorFor(el) {
+  if (el.id) return '#' + CSS.escape(el.id)
+  const parent = el.parentElement
+  if (!parent) return el.tagName.toLowerCase()
+  const sameTag = Array.from(parent.children).filter((c) => c.tagName === el.tagName)
+  const index = sameTag.indexOf(el) + 1
+  const base = selectorFor(parent)
+  return base + ' > ' + el.tagName.toLowerCase() + ':nth-of-type(' + index + ')'
+})`
+
 export const ELEMENT_DESCRIPTOR_EXPRESSION = `(el) => {
   const tag = el.tagName.toLowerCase()
   const type = tag === 'input' ? (el.getAttribute('type') || 'text') : ''

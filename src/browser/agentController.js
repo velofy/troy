@@ -20,6 +20,7 @@ import { createTabPort } from './tabPort.js'
  *   ocr?: import('../read/types.js').OcrEngine,
  *   fetchImpl?: (url: string, init: any) => Promise<any>,
  *   createPort?: typeof createTabPort,
+ *   memory?: { recordRead?: (context: any, result: any) => void, recordAction?: (event: any) => void, recall?: (query: string, opts?: any) => any },
  * }} deps
  */
 export function createAgentController(deps) {
@@ -174,6 +175,7 @@ export function createAgentController(deps) {
         includeScrape: false,
         signal: run.controller.signal,
         authorize: (request) => authorizeAction({ ...request, allowedOrigins: session.origins }),
+        memory: deps.memory,
       },
     )
 

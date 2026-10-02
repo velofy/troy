@@ -20,6 +20,7 @@ import path from 'node:path'
  * @property {string} searchEngine
  * @property {string} agentProvider
  * @property {string} agentModel
+ * @property {boolean} agentMemory
  */
 
 /** @returns {Settings} */
@@ -31,6 +32,10 @@ export function defaults() {
     searchEngine: 'google',
     agentProvider: 'anthropic',
     agentModel: 'claude-opus-5',
+    // The page-memory graph holds what pages said and which controls worked;
+    // that is worth something to an agent and private enough that it is not
+    // collected unless asked for. Same rule as history: off deletes it.
+    agentMemory: false,
   }
 }
 
@@ -67,6 +72,7 @@ export function readSettings(file) {
     searchEngine: typeof stored.searchEngine === 'string' && stored.searchEngine ? stored.searchEngine : base.searchEngine,
     agentProvider: typeof stored.agentProvider === 'string' && stored.agentProvider ? stored.agentProvider : base.agentProvider,
     agentModel: typeof stored.agentModel === 'string' && stored.agentModel ? stored.agentModel : base.agentModel,
+    agentMemory: typeof stored.agentMemory === 'boolean' ? stored.agentMemory : base.agentMemory,
   }
 }
 

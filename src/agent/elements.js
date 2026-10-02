@@ -21,6 +21,18 @@ export class ElementRegistry {
    */
   register(items, context) {
     this.invalidate()
+    return this.add(items, context)
+  }
+
+  /**
+   * Add items without dropping what was already registered. A targeted
+   * query (page_find) hands out refs that must coexist with the last full
+   * read's, not replace them.
+   *
+   * @param {Array<Record<string, any>>} items
+   * @param {{ tabId: number, url: string, epoch: number }} context
+   */
+  add(items, context) {
     return items.map((item) => {
       const ref = `e${++this.counter}`
       const selector = String(item.selector ?? '')

@@ -107,7 +107,7 @@ describe('in-app element capability tools', () => {
     expect(calls).toHaveLength(0)
   })
 
-  it('executes one reversible ref, verifies it, then expires the ref', async () => {
+  it('executes a ref, verifies it, and keeps it usable while the document lives', async () => {
     const { tools, evalQueue } = makeTools()
     await tools.run('page_read', {})
     evalQueue.push(
@@ -118,7 +118,16 @@ describe('in-app element capability tools', () => {
     )
     const clicked = await tools.run('page_click', { ref: 'e1' })
     expect(clicked.ok).toBe(true)
-    expect((await tools.run('page_click', { ref: 'e1' })).error).toMatch(/stale|unknown/i)
+    expect(clicked.pageChanged).toBe(true)
+
+    // The ref survives the action — but re-inspection still runs, so a
+    // control that changed underneath is refused rather than re-clicked.
+    evalQueue.push({
+      count: 1,
+      items: [{ tag: 'input', type: 'text', text: '', label: 'Email', signature: 'changed' }],
+    })
+    const reclick = await tools.run('page_click', { ref: 'e1' })
+    expect(reclick.error).toMatch(/changed|read the page again/i)
   })
 
   it('rejects a ref when the live control descriptor changed after page_read', async () => {

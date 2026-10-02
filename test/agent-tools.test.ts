@@ -110,9 +110,12 @@ describe('the tool specs', () => {
     const gated = Object.fromEntries(specs.map((s) => [s.name, s.gated]))
     expect(gated).toEqual({
       page_read: false,
+      page_find: false,
+      page_recall: false,
       page_text: false,
       page_scrape: false,
       page_navigate: true,
+      page_act: true,
       page_click: true,
       page_fill: true,
       page_select: true,

@@ -979,7 +979,7 @@ describe('launch mode', () => {
   async function launchWith(extraArgs: string[]): Promise<{ app: ElectronApplication; dir: string }> {
     const dir = await mkdtemp(path.join(tmpdir(), 'troy-launch-'))
     // Assertions are about argv, so an ambient TROY_LAUNCH must not leak in.
-    const env = { ...process.env, TROY_TEST: '1' }
+    const env = { ...process.env, TROY_TEST: '1' } as Record<string, string>
     delete env.TROY_LAUNCH
     const launched = await electron.launch({
       args: [path.join(root, 'src', 'browser', 'main.js'), `--user-data-dir=${dir}`, ...extraArgs],
