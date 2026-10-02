@@ -1004,8 +1004,21 @@ describe('launch mode', () => {
     }
   }
 
-  it('comes up visible but not focused when the debugging port is requested', async () => {
+  it('shows nothing at all when the debugging port is requested', async () => {
     const { app: other, dir } = await launchWith([`--cdp-port=${await findClosedPort()}`])
+    try {
+      const snap = await snapshotOf(other)
+      expect(snap.launchMode).toBe('hidden')
+      expect(snap.windowVisible).toBe(false)
+      expect(snap.windowFocused).toBe(false)
+    } finally {
+      await other.close()
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('comes up visible but not focused when --background asks for it', async () => {
+    const { app: other, dir } = await launchWith(['--background', `--cdp-port=${await findClosedPort()}`])
     try {
       const deadline = Date.now() + 15_000
       let snap = await snapshotOf(other)

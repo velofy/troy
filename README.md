@@ -78,11 +78,13 @@ unrestricted control of every tab you are signed into.
 open -a Troy --args --cdp-port=9333     # or: npm run browser -- --cdp-port=9333
 ```
 
-An agent launch must not take your screen. Any launch that asks for the port
-comes up **inactive** — the window appears, but the app you were working in
-keeps focus. `--hidden` goes further and shows nothing until you click the
-dock icon; `--foreground` opts back into normal behaviour. `TROY_LAUNCH` takes
-the same values for launches that cannot pass argv.
+An agent launch must not take your screen, so a launch that exists for the
+bridge shows **nothing at all** — no window, no focus grab — until you ask for
+it. The app runs and the bridge answers; the window only appears when you
+click the dock icon. Pass `--background` if you want a visible-but-unfocused
+window instead, `--foreground` for a normal launch. `TROY_LAUNCH` takes the
+same three values (`hidden`, `background`, `foreground`) for launches that
+cannot pass argv.
 
 ### The agent socket and the `troy` CLI
 
