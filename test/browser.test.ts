@@ -746,13 +746,19 @@ describe('the agent panel', () => {
     await resetToOneTab()
     await omnibox(`${fixtures.url}/article.html`)
     await until((s) => activeTab(s).url.endsWith('/article.html'), 'the article')
-    const outcome = await app.evaluate(({ webContents }, target) => {
-      const page = webContents.getAllWebContents().find((w) => w.getURL() === target)
-      return page?.executeJavaScript(
-        `navigator.mediaDevices ? navigator.mediaDevices.getUserMedia({audio:true}).then(() => 'granted', () => 'denied') : 'denied'`,
-        true,
-      )
-    }, `${fixtures.url}/article.html`)
+    // A denial that never arrives is worse than a wrong answer: bound the
+    // wait so a hung permission request reports as itself, not a timeout
+    // three layers up.
+    const outcome = await Promise.race([
+      app.evaluate(({ webContents }, target) => {
+        const page = webContents.getAllWebContents().find((w) => w.getURL() === target)
+        return page?.executeJavaScript(
+          `navigator.mediaDevices ? navigator.mediaDevices.getUserMedia({audio:true}).then(() => 'granted', () => 'denied') : 'denied'`,
+          true,
+        )
+      }, `${fixtures.url}/article.html`),
+      new Promise((resolve) => setTimeout(() => resolve('hung'), 10_000)),
+    ])
     expect(outcome).toBe('denied')
   })
 
@@ -972,9 +978,12 @@ describe('history', () => {
 describe('launch mode', () => {
   async function launchWith(extraArgs: string[]): Promise<{ app: ElectronApplication; dir: string }> {
     const dir = await mkdtemp(path.join(tmpdir(), 'troy-launch-'))
+    // Assertions are about argv, so an ambient TROY_LAUNCH must not leak in.
+    const env = { ...process.env, TROY_TEST: '1' }
+    delete env.TROY_LAUNCH
     const launched = await electron.launch({
       args: [path.join(root, 'src', 'browser', 'main.js'), `--user-data-dir=${dir}`, ...extraArgs],
-      env: { ...process.env, TROY_TEST: '1' },
+      env,
     })
     return { app: launched, dir }
   }
