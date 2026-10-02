@@ -174,10 +174,11 @@ function readCdpPort() {
 function readLaunchMode() {
   const args = process.argv
   if (args.includes('--foreground') || args.includes('--focus')) return 'foreground'
-  if (args.includes('--hidden') || process.env.TROY_LAUNCH === 'hidden') return 'hidden'
-  if (args.includes('--background') || args.includes('-g') || cdpPort || process.env.TROY_LAUNCH === 'background') {
-    return 'background'
-  }
+  if (args.includes('--hidden')) return 'hidden'
+  if (args.includes('--background') || args.includes('-g')) return 'background'
+  const env = process.env.TROY_LAUNCH
+  if (env === 'hidden' || env === 'background' || env === 'foreground') return env
+  if (cdpPort) return 'background'
   return 'foreground'
 }
 
