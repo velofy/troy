@@ -57,6 +57,11 @@ type TabInfo = {
 type Snapshot = {
   activeTabId: number
   panelOpen: boolean
+  paletteOpen: boolean
+  paletteBounds: { x: number; y: number; width: number; height: number } | null
+  launchMode?: string
+  windowVisible?: boolean
+  windowFocused?: boolean
   tabs: TabInfo[]
   contentBounds: { width: number; height: number } | null
 }
@@ -724,6 +729,57 @@ describe('the agent panel', () => {
     expect(activeTab(closed).bounds.width).toBe(fullWidth)
   })
 
+  it('keeps typed input available when local voice assets are absent', async () => {
+    await resetToOneTab()
+    await menu('toggle-panel')
+    await until((s) => s.panelOpen, 'the agent panel')
+    const voice = await chrome.evaluate(() => window.troy.voiceState())
+    if (!voice.available) {
+      expect(await chrome.locator('#micbtn').isDisabled()).toBe(true)
+      expect(await chrome.getAttribute('#micbtn', 'title')).toMatch(/typing|not installed/i)
+      expect(await chrome.locator('#agentinput').isEnabled()).toBe(true)
+    }
+    await menu('toggle-panel')
+  })
+
+  it('denies microphone access to ordinary web tabs', async () => {
+    await resetToOneTab()
+    await omnibox(`${fixtures.url}/article.html`)
+    await until((s) => activeTab(s).url.endsWith('/article.html'), 'the article')
+    const outcome = await app.evaluate(({ webContents }, target) => {
+      const page = webContents.getAllWebContents().find((w) => w.getURL() === target)
+      return page?.executeJavaScript(
+        `navigator.mediaDevices ? navigator.mediaDevices.getUserMedia({audio:true}).then(() => 'granted', () => 'denied') : 'denied'`,
+        true,
+      )
+    }, `${fixtures.url}/article.html`)
+    expect(outcome).toBe('denied')
+  })
+
+  it('stores provider keys only through OS encryption and never returns the key', async () => {
+    const secret = 'sk-ant-test-integration-not-a-real-key'
+    const before = await chrome.evaluate(() => window.troy.agentState())
+    const result = (await chrome.evaluate(
+      ([provider, key]) => window.troy.setAgentKey(provider, key),
+      ['anthropic', secret] as [string, string],
+    )) as { error?: string }
+    const keyPath = path.join(userDataDir, 'agent-keys.json')
+
+    if (before.keys.encryptionAvailable) {
+      expect(result.error).toBeUndefined()
+      const raw = await readFile(keyPath, 'utf8')
+      expect(raw).not.toContain(secret)
+      const after = await chrome.evaluate(() => window.troy.agentState())
+      expect(after.keys.providers.anthropic).toBe(true)
+      expect(JSON.stringify(after)).not.toContain(secret)
+      await chrome.evaluate(() => window.troy.clearAgentKey('anthropic'))
+    } else {
+      expect(result.error).toMatch(/encrypt|plaintext/i)
+      const raw = await readFile(keyPath, 'utf8').catch(() => '')
+      expect(raw).not.toContain(secret)
+    }
+  })
+
   it('reads the live tab over CDP and leaves no debugger attached behind it', async () => {
     await resetToOneTab()
     await omnibox(`${fixtures.url}/article.html`)
@@ -752,6 +808,87 @@ describe('the agent panel', () => {
       return page ? page.debugger.isAttached() : null
     }, `${fixtures.url}/article.html`)
     expect(stillAttached).toBe(false)
+  })
+})
+
+describe('the command palette', () => {
+  async function inPalette(code: string): Promise<unknown> {
+    const deadline = Date.now() + 15_000
+    while (Date.now() < deadline) {
+      const ready = await app.evaluate(({ webContents }) =>
+        webContents.getAllWebContents().some((w) => w.getURL().includes('palette.html')),
+      )
+      if (ready) {
+        return app.evaluate(
+          ({ webContents }, source) => {
+            const palette = webContents.getAllWebContents().find((w) => w.getURL().includes('palette.html'))
+            if (!palette) throw new Error('the palette webContents disappeared')
+            return palette.executeJavaScript(source, true)
+          },
+          code,
+        )
+      }
+      await new Promise((resolve) => setTimeout(resolve, 60))
+    }
+    throw new Error('the palette webContents did not finish loading')
+  }
+
+  it('opens above the page, runs a command by opaque result id, and closes', async () => {
+    await resetToOneTab()
+    await menu('command-palette')
+    const open = await until((s) => s.paletteOpen, 'the command palette to open')
+    expect(open.paletteBounds?.y ?? 0).toBeGreaterThanOrEqual(88)
+    expect(open.paletteBounds?.width ?? 0).toBeGreaterThan(300)
+
+    const response = (await inPalette(`window.troyPalette.query('new tab')`)) as {
+      queryId: string
+      results: Array<{ id: string; title: string; kind: string }>
+    }
+    const command = response.results.find((result) => result.title === 'New tab')
+    expect(command?.kind).toBe('command')
+    await inPalette(
+      `window.troyPalette.execute(${JSON.stringify(response.queryId)}, ${JSON.stringify(command?.id)}, false)`,
+    )
+
+    const after = await until((s) => s.tabs.length === 2 && !s.paletteOpen, 'the palette command to open a tab')
+    expect(after.tabs).toHaveLength(2)
+  })
+
+  it('persists an explicit bookmark and offers it after the tab moves elsewhere', async () => {
+    await resetToOneTab()
+    await omnibox(`${fixtures.url}/article.html`)
+    await until((s) => activeTab(s).url.endsWith('/article.html'), 'the article')
+    await menu('toggle-bookmark')
+
+    const bookmarkPath = path.join(userDataDir, 'bookmarks.json')
+    const stored = JSON.parse(await readFile(bookmarkPath, 'utf8')) as Array<{ url: string }>
+    expect(stored.some((entry) => entry.url === `${fixtures.url}/article.html`)).toBe(true)
+
+    await omnibox(`${fixtures.url}/popup.html`)
+    await until((s) => activeTab(s).url.endsWith('/popup.html'), 'the popup fixture')
+    await menu('command-palette')
+    await until((s) => s.paletteOpen, 'the command palette')
+    const response = (await inPalette(`window.troyPalette.query('article')`)) as {
+      queryId: string
+      results: Array<{ id: string; kind: string; subtitle: string }>
+    }
+    const bookmark = response.results.find((result) => result.kind === 'bookmark')
+    expect(bookmark?.subtitle).toContain('/article.html')
+    await inPalette(
+      `window.troyPalette.execute(${JSON.stringify(response.queryId)}, ${JSON.stringify(bookmark?.id)}, false)`,
+    )
+    await until((s) => activeTab(s).url.endsWith('/article.html'), 'the bookmarked article to open')
+  })
+
+  it('does not expose the palette bridge to an ordinary web page', async () => {
+    await resetToOneTab()
+    await omnibox(`${fixtures.url}/article.html`)
+    await until((s) => activeTab(s).url.endsWith('/article.html'), 'the article')
+    const exposed = await app.evaluate(({ webContents }, target) => {
+      const page = webContents.getAllWebContents().find((w) => w.getURL() === target)
+      return page?.executeJavaScript('typeof window.troyPalette', true)
+    }, `${fixtures.url}/article.html`)
+    expect(exposed).toBe('undefined')
   })
 })
 
@@ -826,5 +963,82 @@ describe('history', () => {
 
     const { existsSync } = await import('node:fs')
     expect(existsSync(`${userDataDir}/history.json`)).toBe(false)
+  })
+})
+
+// An agent launching Troy for its debugging port must not seize the screen
+// the person is working in. These launch a separate Electron each because the
+// mode is decided from argv, once, before the window exists.
+describe('launch mode', () => {
+  async function launchWith(extraArgs: string[]): Promise<{ app: ElectronApplication; dir: string }> {
+    const dir = await mkdtemp(path.join(tmpdir(), 'troy-launch-'))
+    const launched = await electron.launch({
+      args: [path.join(root, 'src', 'browser', 'main.js'), `--user-data-dir=${dir}`, ...extraArgs],
+      env: { ...process.env, TROY_TEST: '1' },
+    })
+    return { app: launched, dir }
+  }
+
+  async function snapshotOf(launched: ElectronApplication): Promise<Snapshot> {
+    const deadline = Date.now() + 15_000
+    for (;;) {
+      try {
+        return (await launched.evaluate(() => {
+          const hook = (globalThis as unknown as { __troy?: { snapshot(): unknown } }).__troy
+          if (!hook) throw new Error('TROY_TEST snapshot hook is missing')
+          return hook.snapshot()
+        })) as Snapshot
+      } catch (error) {
+        if (Date.now() > deadline) throw error
+        await new Promise((resolve) => setTimeout(resolve, 100))
+      }
+    }
+  }
+
+  it('comes up visible but not focused when the debugging port is requested', async () => {
+    const { app: other, dir } = await launchWith([`--cdp-port=${await findClosedPort()}`])
+    try {
+      const deadline = Date.now() + 15_000
+      let snap = await snapshotOf(other)
+      while (Date.now() < deadline && !snap.windowVisible) {
+        await new Promise((resolve) => setTimeout(resolve, 60))
+        snap = await snapshotOf(other)
+      }
+      expect(snap.launchMode).toBe('background')
+      expect(snap.windowVisible).toBe(true)
+      expect(snap.windowFocused).toBe(false)
+    } finally {
+      await other.close()
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('stays completely out of the way when launched --hidden', async () => {
+    const { app: other, dir } = await launchWith(['--hidden'])
+    try {
+      const snap = await snapshotOf(other)
+      expect(snap.launchMode).toBe('hidden')
+      expect(snap.windowVisible).toBe(false)
+    } finally {
+      await other.close()
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('shows and activates normally when launched --foreground', async () => {
+    const { app: other, dir } = await launchWith(['--foreground', `--cdp-port=${await findClosedPort()}`])
+    try {
+      const deadline = Date.now() + 15_000
+      let snap = await snapshotOf(other)
+      while (Date.now() < deadline && !snap.windowVisible) {
+        await new Promise((resolve) => setTimeout(resolve, 60))
+        snap = await snapshotOf(other)
+      }
+      expect(snap.launchMode).toBe('foreground')
+      expect(snap.windowVisible).toBe(true)
+    } finally {
+      await other.close()
+      await rm(dir, { recursive: true, force: true })
+    }
   })
 })

@@ -17,11 +17,14 @@
     "icons": "node scripts/icons.mjs",
     "smoke": "node scripts/smoke-packaged.mjs",
     "stress": "node scripts/stress.mjs",
-    "clean": "rm -rf release",
-    "pack": "npm run clean && electron-builder --dir",
-    "dist:mac": "npm run clean && electron-builder --mac",
-    "dist:win": "npm run clean && electron-builder --win",
-    "dist": "npm run clean && electron-builder --mac --win"
+    "voice:prepare": "node scripts/prepare-whisper.mjs",
+    "ocr:prepare": "node scripts/prepare-vision.mjs",
+    "native:prepare": "npm run voice:prepare && npm run ocr:prepare",
+    "clean": "node -e \"require('node:fs').rmSync('release',{recursive:true,force:true})\"",
+    "pack": "node scripts/package-target.mjs --dir",
+    "dist:mac": "node scripts/package-target.mjs --mac",
+    "dist:win": "node scripts/package-target.mjs --win",
+    "dist": "node -e \"throw new Error('Use dist:mac or dist:win on the target operating system')\""
   },
   "license": "MIT",
   "repository": {

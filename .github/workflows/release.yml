@@ -25,13 +25,16 @@ jobs:
         include:
           - os: macos-latest
             flag: --mac --arm64
+            arch: arm64
             artifact: mac-arm64
           - os: macos-latest
             flag: --mac --x64
+            arch: x64
             artifact: mac-x64
             rosetta: true
           - os: windows-latest
             flag: --win --x64
+            arch: x64
             artifact: windows-x64
     runs-on: ${{ matrix.os }}
     steps:
@@ -50,6 +53,13 @@ jobs:
 
       - run: npm ci
 
+      - name: Build offline voice assets
+        run: npm run voice:prepare -- --arch ${{ matrix.arch }}
+
+      - name: Build Apple Vision OCR helper
+        if: runner.os == 'macOS'
+        run: npm run ocr:prepare -- --arch ${{ matrix.arch }}
+
       # Build the installers. Nothing is signed yet, so tell electron-builder
       # not to go looking for a certificate and fail the build over it.
       - name: Build installers
@@ -63,6 +73,8 @@ jobs:
       # be caught before people download it.
       - name: Smoke test the packaged app
         run: node scripts/smoke-packaged.mjs
+        env:
+          TROY_TARGET_ARCH: ${{ matrix.arch }}
 
       - uses: actions/upload-artifact@v4
         with:

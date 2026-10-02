@@ -47,17 +47,20 @@ function attach(wc) {
  * than failing the read, which is why no heroic recovery lives here.
  *
  * @param {import('electron').WebContents} wc
+ * @param {(expression: string) => Promise<string>} evaluate
  * @param {import('../read/types.js').Box} [box]
+ * @param {{ image?: Promise<import('electron').NativeImage>, cssWidth?: Promise<number> }} [cache]
  * @returns {Promise<Buffer>}
  */
-async function captureClip(wc, box) {
-  const image = await wc.capturePage()
+async function captureClip(wc, evaluate, box, cache = {}) {
+  cache.image ??= wc.capturePage()
+  const image = await cache.image
   if (!box) return image.toPNG()
   // Device pixels per css pixel, derived rather than assumed: display
   // scaling and zoom both live in this ratio, and the page itself is the
   // only authority on its css width.
-  const { evaluate } = attach(wc)
-  const cssWidth = Number(await evaluate('window.innerWidth')) || image.getSize().width
+  cache.cssWidth ??= evaluate('window.innerWidth').then((value) => Number(value) || image.getSize().width)
+  const cssWidth = await cache.cssWidth
   const dpr = image.getSize().width / cssWidth
   const cropped = image.crop({
     x: Math.round(box.x * dpr),
@@ -72,15 +75,17 @@ async function captureClip(wc, box) {
  * Read the page in this tab: settle, extract, cover, transcribe, fuse.
  *
  * @param {import('electron').WebContents} wc
- * @param {{ settleTimeoutMs?: number }} [opts]
+ * @param {{ settleTimeoutMs?: number, ocr?: import('../read/types.js').OcrEngine }} [opts]
  */
 export async function readTab(wc, opts = {}) {
   const { evaluate, attachedHere } = attach(wc)
+  /** @type {{ image?: Promise<import('electron').NativeImage>, cssWidth?: Promise<number> }} */
+  const captureCache = {}
   try {
     const doc = await readPage(
       {
         evaluate,
-        screenshot: (box) => captureClip(wc, box),
+        screenshot: (box) => captureClip(wc, evaluate, box, captureCache),
       },
       opts,
     )

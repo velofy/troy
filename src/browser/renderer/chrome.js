@@ -14,7 +14,6 @@ const forwardBtn = document.getElementById('forward')
 const reloadBtn = document.getElementById('reload')
 const panelBtn = document.getElementById('panel')
 const panelEl = document.getElementById('agentpanel')
-const panelBody = document.getElementById('panelbody')
 const noticeEl = document.getElementById('notice')
 
 // True while the user is typing, so a background tab finishing a load does
@@ -91,6 +90,27 @@ function finishProgress() {
 function makeTab(id) {
   const root = document.createElement('div')
   root.className = 'tab'
+  root.setAttribute('role', 'tab')
+  root.tabIndex = -1
+  root.addEventListener('click', () => window.troy.selectTab(id))
+  root.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault()
+      window.troy.selectTab(id)
+      return
+    }
+    const order = [...live.keys()]
+    const current = order.indexOf(id)
+    let target = -1
+    if (event.key === 'ArrowRight') target = (current + 1) % order.length
+    else if (event.key === 'ArrowLeft') target = (current - 1 + order.length) % order.length
+    else if (event.key === 'Home') target = 0
+    else if (event.key === 'End') target = order.length - 1
+    if (target >= 0) {
+      event.preventDefault()
+      live.get(order[target])?.root.focus()
+    }
+  })
 
   const fav = document.createElement('img')
   fav.className = 'fav'
@@ -114,7 +134,6 @@ function makeTab(id) {
 
   const label = document.createElement('span')
   label.className = 'label'
-  label.addEventListener('click', () => window.troy.selectTab(id))
 
   // Drawn, not typed. The "×" character sits on the font's math axis rather
   // than the middle of its box, so a text close button is always a little
@@ -142,6 +161,8 @@ function updateTab(entry, tab) {
     entry.close.setAttribute('aria-label', `Close ${tab.title}`)
   }
   entry.root.classList.toggle('active', tab.active)
+  entry.root.setAttribute('aria-selected', String(tab.active))
+  entry.root.tabIndex = tab.active ? 0 : -1
 
   // The spinner takes the icon's place while loading, so the tab does not
   // change width when a page starts or finishes.
@@ -237,36 +258,4 @@ omni.addEventListener('keydown', async (e) => {
   } else if (e.key === 'Escape') {
     omni.blur()
   }
-})
-
-document.getElementById('readbtn').addEventListener('click', async () => {
-  panelBody.textContent = ''
-  const meta = document.createElement('p')
-  meta.className = 'readmeta'
-  meta.textContent = 'reading the live tab over CDP...'
-  panelBody.append(meta)
-
-  const result = await window.troy.read()
-  panelBody.textContent = ''
-
-  const info = document.createElement('p')
-  info.className = 'readmeta'
-  const out = document.createElement('pre')
-  out.className = 'readout'
-
-  if (result.error) {
-    info.textContent = 'could not read this tab'
-    out.textContent = result.error
-  } else {
-    const parts = [
-      result.url,
-      result.title,
-      `${result.blockCount} blocks (${result.domBlockCount} dom, ${result.ocrBlockCount} ocr), ${result.regionCount} regions`,
-      `${result.characterCount} characters in ${result.elapsedMs}ms, settle ${result.settled ? 'ok' : 'timed out'}`,
-    ]
-    if (result.degraded) parts.push('page never finished settling')
-    info.textContent = parts.join('\n')
-    out.textContent = result.markdown
-  }
-  panelBody.append(info, out)
 })

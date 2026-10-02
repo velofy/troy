@@ -21,6 +21,7 @@ afterPack: scripts/after-pack.cjs
 # and none of the toolchain that produced the build.
 files:
   - package.json
+  - THIRD_PARTY_NOTICES.md
   - src/browser/**/*
   - src/read/**/*
   - src/agent/**/*
@@ -28,11 +29,20 @@ files:
   - '!**/*.map'
   - '!**/*.ts'
 
+# Offline push-to-talk assets are generated from pinned whisper.cpp sources by
+# npm run voice:prepare, then copied outside the asar so execFile can run them.
+extraResources:
+  - from: build/voice
+    to: voice
+
 # Chromium is the bulk of the download either way; compressing it harder is
 # worth the extra minute on a release build.
 compression: maximum
 
 mac:
+  extraResources:
+    - from: build/ocr
+      to: ocr
   category: public.app-category.developer-tools
   icon: build/icon.icns
   darkModeSupport: true
@@ -48,6 +58,7 @@ mac:
       - CFBundleURLName: Web site URL
         CFBundleURLSchemes: [http, https]
     NSHumanReadableCopyright: Copyright (c) 2026 Anish Kumar
+    NSMicrophoneUsageDescription: Troy records audio only while push-to-talk is held and transcribes it locally on this Mac.
 
 # Artifact names carry no version, so the download button on the site can be
 # a permanent link to releases/latest/download/<name> instead of something

@@ -50,8 +50,31 @@ export type ReadResult =
     }
   | { error: string }
 
+export type AgentState = {
+  provider: string
+  model: string
+  defaults: Record<string, string>
+  keys: { encryptionAvailable: boolean; providers: Record<string, boolean> }
+  session: {
+    tabId: number
+    running: boolean
+    runId: string | null
+    origins: string[]
+    pendingBoundary: string | null
+    messages: Array<{ role: string; text: string }>
+  }
+}
+
+export type AgentEvent = {
+  type: string
+  runId?: string
+  tabId?: number
+  sequence?: number
+  [key: string]: unknown
+}
+
 export interface TroyBridge {
-  newTab(url?: string): Promise<void>
+  newTab(url?: string): Promise<NavResult>
   selectTab(id: number): Promise<void>
   closeTab(id: number): Promise<void>
   back(): Promise<void>
@@ -60,7 +83,24 @@ export interface TroyBridge {
   go(input: string): Promise<NavResult>
   togglePanel(): Promise<boolean>
   read(): Promise<ReadResult>
+  agentState(): Promise<AgentState>
+  setAgentSettings(settings: { provider?: string; model?: string }): Promise<AgentState | { error: string }>
+  setAgentKey(provider: string, key: string): Promise<unknown>
+  clearAgentKey(provider: string): Promise<unknown>
+  submitAgent(text: string): Promise<{ ok?: boolean; runId?: string; error?: string }>
+  stopAgent(): Promise<{ stopped: boolean }>
+  clearAgent(): Promise<{ ok?: boolean; error?: string }>
+  grantAgentOrigin(origin: string): Promise<{ ok?: boolean; error?: string }>
+  voiceState(): Promise<{ available: boolean; engine: string; offline: boolean; reason: string }>
+  beginVoiceCapture(): Promise<{ ok?: boolean; error?: string; expiresAt?: number }>
+  endVoiceCapture(): Promise<{ ok?: boolean }>
+  transcribeVoice(wav: ArrayBuffer): Promise<{ ok?: boolean; text?: string; error?: string; cancelled?: boolean }>
+  onVoicePress(handler: () => void): () => void
+  onVoiceRelease(handler: () => void): () => void
+  onVoiceCancel(handler: () => void): () => void
+  onAgentEvent(handler: (event: AgentEvent) => void): () => void
   onTabs(handler: (state: ChromeState) => void): () => void
   onNotice(handler: (reason: string) => void): () => void
   onFocusOmnibox(handler: () => void): () => void
+  onReadRequested(handler: () => void): () => void
 }

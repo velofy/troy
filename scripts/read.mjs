@@ -18,8 +18,15 @@ import { toMarkdown } from '../src/read/render.js'
 
 function endpointFile() {
   if (process.env.TROY_ENDPOINT_FILE) return process.env.TROY_ENDPOINT_FILE
-  const base = process.platform === 'win32' ? 'AppData/Roaming' : 'Library/Application Support'
-  return path.join(os.homedir(), base, 'Troy', 'agent-endpoint.json')
+  if (process.platform === 'win32') {
+    const appData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming')
+    return path.join(appData, 'Troy', 'agent-endpoint.json')
+  }
+  if (process.platform === 'darwin') {
+    return path.join(os.homedir(), 'Library', 'Application Support', 'Troy', 'agent-endpoint.json')
+  }
+  const configHome = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config')
+  return path.join(configHome, 'Troy', 'agent-endpoint.json')
 }
 
 async function attach() {
