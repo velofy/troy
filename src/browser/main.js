@@ -124,12 +124,11 @@ if (cdpPort) {
 
 /**
  * How the window comes up. The usual reason Troy is spawned from a script is
- * that an agent wants its debugging port, and a window that seizes focus in
- * the middle of someone's typing is a bug, not a feature. So a launch that
- * asks for the agent bridge (or passes --background) comes up inactive: the
- * window is on screen, but the app that had focus keeps it. --hidden goes one
- * step further and shows nothing until the app is activated. --foreground
- * opts back into ordinary behaviour.
+ * that an agent wants its bridge, and a window that seizes focus — or even
+ * appears — in the middle of someone's typing is a bug, not a feature. So a
+ * launch that asks for the agent bridge shows nothing at all until the app
+ * is activated. --background shows the window unfocused; --foreground opts
+ * back into ordinary behaviour.
  */
 /**
  * The agent socket is the typed command surface a CLI agent talks to. It
@@ -193,7 +192,9 @@ function readLaunchMode() {
   if (args.includes('--background') || args.includes('-g')) return 'background'
   const env = process.env.TROY_LAUNCH
   if (env === 'hidden' || env === 'background' || env === 'foreground') return env
-  if (agentSocketWanted) return 'background'
+  // A launch that exists for the bridge is for the agent, not for the person
+  // at the keyboard, so nothing appears at all unless it was asked for.
+  if (agentSocketWanted) return 'hidden'
   return 'foreground'
 }
 
