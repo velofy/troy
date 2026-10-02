@@ -474,20 +474,19 @@ export function createTools(host, options = {}) {
     // at resolve time, not clicked blindly. Navigation still invalidates via
     // the document epoch. pageChanged tells the model the inventory may have
     // grown without making it pay a re-read to learn that it did.
+    const reasons = diffSnapshots(before, after)
     options.memory?.recordAction?.({
       kind: 'click',
       item: { ...item, selector },
       fromUrl: String(before.url ?? ''),
       toUrl: String(after.url ?? ''),
-      ok: diffSnapshots(before, after).length > 0,
+      ok: reasons.length > 0,
     })
 
     if (options.authorize && host.context) {
       const boundary = refusal(options.authorize({ name: 'page_navigate', targetUrl: host.context().url }))
       if (boundary) return boundary
     }
-
-    const reasons = diffSnapshots(before, after)
     if (reasons.length === 0) {
       return {
         ok: false,
