@@ -5,7 +5,7 @@
   "type": "module",
   "description": "A browser an agent can actually read: DOM for structure, OCR for the pixels the DOM cannot explain.",
   "main": "src/browser/main.js",
-  "author": "Anish Kumar <anishfyi@gmail.com>",
+  "author": "Velofy <anish@velofy.co>",
   "scripts": {
     "detect": "node scripts/detect.mjs",
     "fill": "node scripts/fill.mjs",
