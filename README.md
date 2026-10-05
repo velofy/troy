@@ -28,14 +28,14 @@
 <p align="center"><strong>Primary sponsor</strong></p>
 
 <p align="center">
-  <a href="https://go.nodemaven.com/troyGH" title="NodeMaven: best proxy for web scraping and automation">
+  <a href="https://go.nodemaven.com/troyreadmeoct" title="NodeMaven: best proxy for web scraping and automation">
     <img src="https://raw.githubusercontent.com/velofy/troy/main/assets/sponsors/nodemaven-banner.jpg" alt="NodeMaven: best proxy for web scraping and automation with the highest quality IP" width="720">
   </a>
 </p>
 
-**[NodeMaven](https://go.nodemaven.com/troyGH)**: the most efficient proxy provider for web scraping and automation, with the highest quality IPs on the market.
+**[NodeMaven](https://go.nodemaven.com/troyreadmeoct)**: the most efficient proxy provider for web scraping and automation, with the highest quality IPs on the market.
 
-Why [NodeMaven](https://go.nodemaven.com/troyGH)?
+Why [NodeMaven](https://go.nodemaven.com/troyreadmeoct)?
 
 - ZIP targeting
 - 99.9% uptime
