@@ -135,10 +135,13 @@ async function buildCdp(page: Page, session: CDPSession, onClose: () => Promise<
     },
 
     async url(): Promise<string> {
-      // Reads Playwright's cached URL for this page rather than querying
-      // the CDP session directly. Fine while Playwright is the only
-      // backend; worth revisiting once Electron's webContents.debugger is
-      // the other implementation of this port.
+      // location.href is what the document considers current, including hash
+      // changes and pushState updates that Page.getFrameTree can lag on.
+      const { result } = await session.send('Runtime.evaluate', {
+        expression: 'location.href',
+        returnByValue: true,
+      })
+      if (typeof result.value === 'string') return result.value
       return page.url()
     },
 
@@ -176,13 +179,11 @@ export async function connectOverWs(wsUrl: string): Promise<Cdp> {
   const page = await firstPage(context)
   const session = await context.newCDPSession(page)
   return buildCdp(page, session, async () => {
-    // Detaches Troy's own CDP session only. The underlying WebSocket
-    // connection Playwright opened for `browser` is intentionally left
-    // open (closing it is what risks touching the real browser, see
-    // above), so a long-lived process that calls connectOverWs()/close()
-    // repeatedly does accumulate connection handles. Left for Task 12 to
-    // revisit once the real reconnect pattern is known.
+    // Detach Troy's session, then drop Playwright's connection handle.
+    // For connectOverCDP, browser.close() disconnects only and does not
+    // terminate the browser the user may still be signed into.
     await session.detach().catch(() => undefined)
+    await browser.close()
   })
 }
 

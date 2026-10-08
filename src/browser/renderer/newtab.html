@@ -42,8 +42,6 @@
              aria-label="Search or enter address" placeholder="Search Google or enter address">
     </form>
 
-    <div class="tiles" id="tiles" hidden></div>
-
     <p class="hints">
       <span><kbd>Cmd</kbd><kbd>L</kbd> address bar</span>
       <span><kbd>Cmd</kbd><kbd>T</kbd> new tab</span>
@@ -77,17 +75,6 @@
       this machine only when you press Enter. Blocking third-party trackers
       does not change the fact that a Google search is seen by Google.
     </p>
-  </div>
-
-  <div class="addbox" id="addbox" hidden>
-    <h2>Add shortcut</h2>
-    <label>Name<input id="addTitle" type="text" autocomplete="off" placeholder="Optional"></label>
-    <label>Address<input id="addUrl" type="text" autocomplete="off" placeholder="example.com"></label>
-    <p class="err" id="addErr" hidden></p>
-    <div class="actions">
-      <button type="button" id="addCancel" class="ghost">Cancel</button>
-      <button type="button" id="addSave" class="solid">Add</button>
-    </div>
   </div>
 
   <script src="newtab.js"></script>

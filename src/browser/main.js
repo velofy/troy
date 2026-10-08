@@ -17,9 +17,10 @@ import { resolveOmnibox, ENGINES } from './omnibox.js'
 import { installSafetyNet } from './resilience.js'
 import { installBlocker } from './tracking.js'
 import { settingsFile, readSettings, writeSettings } from './settings.js'
-import { shortcutsFile, readShortcuts, addShortcut, removeShortcut } from './shortcuts.js'
 import { loadExtensions, summarise } from './extensions.js'
 import { describeEndpoint, endpointFile, writeEndpoint, clearEndpoint } from './endpoint.js'
+import { readTab, summariseDocument } from './readPort.js'
+import { historyFile, recordVisit, clearHistory } from './history.js'
 
 const dir = path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.join(dir, '..', '..')
@@ -248,6 +249,12 @@ function createTab(url = NEW_TAB_URL) {
   }
 
   wc.on('did-navigate', (_event, navigatedTo) => {
+    // Chromium lands here after a blocked location.href assignment. Go back
+    // rather than leaving the tab on an empty placeholder page.
+    if (navigatedTo === 'about:blank#blocked' && wc.navigationHistory.canGoBack()) {
+      wc.navigationHistory.goBack()
+      return
+    }
     if (!navigatedTo.startsWith(ERROR_PAGE)) {
       tab.failed = null
       tab.favicon = null
@@ -256,6 +263,7 @@ function createTab(url = NEW_TAB_URL) {
     // for some earlier address is out of date by definition.
     tab.pending = navigatedTo
     syncChrome()
+    maybeRecordHistory(tab, navigatedTo)
   })
 
   // A redirect changes what "the address we asked for" means, so the
@@ -264,8 +272,15 @@ function createTab(url = NEW_TAB_URL) {
   wc.on('did-redirect-navigation', (_details, redirectedTo, _isInPlace, isMainFrame) => {
     if (isMainFrame) tab.pending = redirectedTo
   })
-  wc.on('did-navigate-in-page', (_event, _navigatedTo, isMainFrame) => {
-    if (isMainFrame) syncChrome()
+  wc.on('did-navigate-in-page', (_event, navigatedTo, isMainFrame) => {
+    if (isMainFrame) {
+      tab.pending = navigatedTo
+      syncChrome()
+    }
+  })
+
+  wc.on('did-stop-loading', () => {
+    maybeRecordHistory(tab)
   })
 
   wc.on('page-favicon-updated', (_event, icons) => {
@@ -448,7 +463,11 @@ function notify(message) {
  */
 function isNavigableUrl(url) {
   const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(url)?.[1]?.toLowerCase()
-  return scheme === 'http' || scheme === 'https' || scheme === 'file' || scheme === 'about'
+  if (scheme === 'http' || scheme === 'https' || scheme === 'file') return true
+  // Same rule as the omnibox: about:blank is a blank canvas, everything
+  // else is browser internals a page must not steer you toward.
+  if (scheme === 'about') return url.toLowerCase() === 'about:blank'
+  return false
 }
 
 /** @param {number} id */
@@ -483,8 +502,12 @@ function closeTab(id) {
   const index = order.indexOf(id)
 
   tabs.delete(id)
-  win.contentView.removeChildView(tab.view)
-  if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close()
+  try {
+    win.contentView.removeChildView(tab.view)
+  } catch {
+    // The view may already be gone; pruneDeadTabs will forget the tab.
+  }
+  if (alive(tab)) tab.view.webContents.close()
 
   if (activeTabId !== id) {
     syncChrome()
@@ -501,7 +524,7 @@ function closeTab(id) {
 /** @returns {import('electron').WebContents | null} */
 function activeContents() {
   const tab = tabs.get(activeTabId)
-  if (!tab || tab.view.webContents.isDestroyed()) return null
+  if (!alive(tab)) return null
   return tab.view.webContents
 }
 
@@ -813,35 +836,18 @@ function newTabOnly(handler) {
   }
 }
 
-// The new tab page's surface, refused for every other page.
+// The new tab page's surface, refused for every other page. Shortcuts were
+// removed outright: a grid nobody could populate without the broken dialog
+// is worse than no grid, and the page reads better as one honest search box.
 ipcMain.handle(
   'newtab:state',
   newTabOnly(() => {
-    const dir = app.getPath('userData')
     const current = settings()
     return {
-      shortcuts: readShortcuts(shortcutsFile(dir)),
       rememberHistory: current.rememberHistory,
       blockTrackers: current.blockTrackers,
     }
   }),
-)
-
-ipcMain.handle(
-  'newtab:add',
-  newTabOnly((_e, /** @type {{url?: unknown, title?: unknown}} */ entry) =>
-    addShortcut(shortcutsFile(app.getPath('userData')), {
-      url: String(entry?.url ?? ''),
-      title: entry?.title ? String(entry.title) : undefined,
-    }),
-  ),
-)
-
-ipcMain.handle(
-  'newtab:remove',
-  newTabOnly((_e, /** @type {unknown} */ url) =>
-    removeShortcut(shortcutsFile(app.getPath('userData')), String(url ?? '')),
-  ),
 )
 
 ipcMain.handle(
@@ -853,60 +859,18 @@ ipcMain.handle(
   }),
 )
 
-// A tile goes through the same resolver as the address bar, so a tile can
-// never open something the address bar would refuse.
-ipcMain.handle(
-  'newtab:open',
-  newTabOnly((_e, /** @type {unknown} */ url) => {
-    const result = navigate(String(url ?? ''))
-    if (result.kind === 'refused') notify(`Troy will not open that: ${result.reason ?? ''}`)
-    return result.kind
-  }),
-)
-
-// Reading the live tab. The engine lands here in the next step; today this
-// proves the CDP attach path the whole design rests on, using the same
-// protocol calls the Cdp port makes.
+// Reading the live tab through the real pipeline: settle, extract, cover,
+// transcribe, fuse. The heavy lifting lives in src/read and the tab adapter
+// in readPort.js; this handler stays thin on purpose. Attaches CDP briefly,
+// the same way the Cdp port does, and always detaches so DevTools stay usable.
 ipcMain.handle('agent:read', async () => {
   const wc = activeContents()
   if (!wc) return { error: 'no active tab' }
-  let attachedHere = false
   try {
-    if (!wc.debugger.isAttached()) {
-      wc.debugger.attach('1.3')
-      attachedHere = true
-    }
-    // innerText is the right reading of a page, because it reflects what is
-    // laid out and painted rather than everything the DOM happens to hold.
-    // It is empty when nothing has been laid out at all, which happens on a
-    // tab that has never been shown, so fall back to textContent and say so
-    // rather than reporting a page as blank. The real pipeline decides
-    // visibility itself and will not need either.
-    const { result } = await wc.debugger.sendCommand('Runtime.evaluate', {
-      expression: `(() => {
-        const body = document.body
-        if (!body) return JSON.stringify({ text: document.title, degraded: false })
-        const painted = (body.innerText || '').trim()
-        const raw = (body.textContent || '').trim()
-        const degraded = painted.length === 0 && raw.length > 0
-        const text = painted || raw
-        return JSON.stringify({ text: (document.title + '\\n' + text).slice(0, 4000), degraded })
-      })()`,
-      returnByValue: true,
-    })
-    const parsed = JSON.parse(String(result.value ?? '{}'))
-    return { url: wc.getURL(), text: String(parsed.text ?? ''), degraded: Boolean(parsed.degraded) }
+    const doc = await readTab(wc)
+    return summariseDocument(doc)
   } catch (err) {
     return { error: errorMessage(err) }
-  } finally {
-    // Leaving the debugger attached locks DevTools out of the tab for good.
-    if (attachedHere && !wc.isDestroyed() && wc.debugger.isAttached()) {
-      try {
-        wc.debugger.detach()
-      } catch {
-        // Already gone with the renderer; nothing to release.
-      }
-    }
   }
 })
 
@@ -951,11 +915,46 @@ function settings() {
  * @returns {import('./settings.js').Settings}
  */
 function updateSettings(patch) {
+  const before = settings()
   settingsCache = writeSettings(settingsFile(app.getPath('userData')), patch)
+  if (before.rememberHistory && !settingsCache.rememberHistory) {
+    clearHistory(historyFile(app.getPath('userData')))
+  }
   return settingsCache
 }
 
+/**
+ * Record a finished load when the user asked Troy to remember where they went.
+ *
+ * @param {Tab} tab
+ * @param {string} [urlOverride]
+ */
+function maybeRecordHistory(tab, urlOverride) {
+  if (!settings().rememberHistory || !alive(tab) || tab.failed) return
+  const wc = tab.view.webContents
+  const url = urlOverride ?? wc.getURL()
+  if (!url.startsWith('http://') && !url.startsWith('https://')) return
+  if (url.startsWith(NEW_TAB_URL) || url.startsWith(ERROR_PAGE)) return
+  recordVisit(historyFile(app.getPath('userData')), { url, title: wc.getTitle() || hostOf(url) })
+}
+
 app.whenReady().then(async () => {
+  // The About panel is the one page every user eventually reads, so it says
+  // plainly what Troy is and where its author's other work lives.
+  app.setAboutPanelOptions({
+    applicationName: 'Troy',
+    applicationVersion: app.getVersion(),
+    credits: [
+      'A browser an agent can actually read and drive.',
+      '',
+      'Troy is a real Chromium browser with its own chrome, built so an AI agent can attach to the window you are already signed into and work the page with you. Most automation starts a fresh, empty browser; Troy inverts that: you browse in it, and the agent joins your session.',
+      '',
+      'Made by Anish Kr Singh.',
+      'More of my work: https://anishfyi.com and https://velofy.co',
+      'Project home: https://anishfyi.com/troy',
+    ].join('\n'),
+  })
+
   // Before anything else. An uncaught error in a handler used to end the
   // browser, tabs and all, and report itself only as "Troy quit unexpectedly".
   installSafetyNet({
