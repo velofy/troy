@@ -32,7 +32,22 @@ export type NavResult = {
 }
 
 export type ReadResult =
-  | { url: string; text: string; degraded: boolean }
+  | {
+      url: string
+      title: string
+      /** Every fused block, dom and ocr together. */
+      blockCount: number
+      domBlockCount: number
+      ocrBlockCount: number
+      /** Page regions the DOM could not explain; each was OCR'd or left untranscribed. */
+      regionCount: number
+      characterCount: number
+      elapsedMs: number
+      settled: boolean
+      ocrEngine: string
+      markdown: string
+      degraded: boolean
+    }
   | { error: string }
 
 export interface TroyBridge {

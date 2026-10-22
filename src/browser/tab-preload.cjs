@@ -32,15 +32,9 @@ function looksLikeNewTab() {
 
 if (looksLikeNewTab()) {
   contextBridge.exposeInMainWorld('troyNewTab', {
-    /** @returns {Promise<{shortcuts: Array<{url: string, title: string}>, rememberHistory: boolean, blockTrackers: boolean}>} */
+    /** @returns {Promise<{rememberHistory: boolean, blockTrackers: boolean}>} */
     state: () => ipcRenderer.invoke('newtab:state'),
-    /** @param {string} url @param {string} [title] */
-    addShortcut: (url, title) => ipcRenderer.invoke('newtab:add', { url, title }),
-    /** @param {string} url */
-    removeShortcut: (url) => ipcRenderer.invoke('newtab:remove', url),
     /** @param {string} key @param {boolean} value */
     setSetting: (key, value) => ipcRenderer.invoke('newtab:setting', { key, value }),
-    /** @param {string} url open a tile, through the same rules as the address bar */
-    open: (url) => ipcRenderer.invoke('newtab:open', url),
   })
 }

@@ -258,9 +258,15 @@ document.getElementById('readbtn').addEventListener('click', async () => {
     info.textContent = 'could not read this tab'
     out.textContent = result.error
   } else {
-    const chars = result.text.length
-    info.textContent = `${result.url}\n${chars} characters, dom only for now`
-    out.textContent = result.text
+    const parts = [
+      result.url,
+      result.title,
+      `${result.blockCount} blocks (${result.domBlockCount} dom, ${result.ocrBlockCount} ocr), ${result.regionCount} regions`,
+      `${result.characterCount} characters in ${result.elapsedMs}ms, settle ${result.settled ? 'ok' : 'timed out'}`,
+    ]
+    if (result.degraded) parts.push('page never finished settling')
+    info.textContent = parts.join('\n')
+    out.textContent = result.markdown
   }
   panelBody.append(info, out)
 })

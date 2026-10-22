@@ -102,4 +102,14 @@ describe('writing and reading the endpoint', () => {
     expect(existsSync(file)).toBe(false)
     expect(() => clearEndpoint(file)).not.toThrow()
   })
+
+  it('writes atomically so readers never see a half-written file', async () => {
+    const dir = await tempDir()
+    const file = endpointFile(dir)
+    const endpoint = describeEndpoint({ port: 9222, pid: 42, version: '0.1.0' })
+    writeEndpoint(file, endpoint)
+    expect(readEndpoint(file)).toEqual(endpoint)
+    const leftovers = (await import('node:fs')).readdirSync(dir).filter((name) => name.includes('.tmp'))
+    expect(leftovers).toEqual([])
+  })
 })

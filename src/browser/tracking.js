@@ -189,6 +189,7 @@ export function shouldBlockRequest(url, initiator) {
   if (initiator) {
     try {
       const from = new URL(initiator)
+      if (from.protocol !== 'http:' && from.protocol !== 'https:') return true
       if (siteOf(from.hostname) === siteOf(target.hostname)) return false
     } catch {
       // An unparseable initiator is treated as third party, which is the
