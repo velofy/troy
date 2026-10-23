@@ -72,6 +72,7 @@ const found = await page.evaluate(({ within, text, selector }) => {
       name: el.getAttribute('name') || '',
       text: norm(el.textContent).slice(0, 60),
       cls: (el.className || '').toString().slice(0, 50),
+      disabled: el.disabled === true,
     })),
   };
 }, { within, text, selector });
@@ -90,6 +91,11 @@ const el = found.items[0];
 if (SUBMIT.test(el.text) || SUBMIT.test(el.name)) {
   die(`refusing: "${el.text}" looks like a commit control. Troy operates, it never submits.`);
 }
+// A disabled control cannot act, so clicking it can only ever come back as
+// "dispatched but nothing changed". Refusing says why, up front.
+if (el.disabled) {
+  die(`refusing: <${el.tag}> "${el.text}" is disabled. It cannot respond to a click.`);
+}
 
 if (dryRun) {
   out({ dryRun: true, url: page.url(), within, text, selector, would_click: el });
@@ -97,22 +103,30 @@ if (dryRun) {
 }
 
 const before = await snapshot(page, { scope: within });
-await page.evaluate(({ within, text, selector }) => {
-  const norm = (s) => (s || '').replace(/\s+/g, ' ').trim();
-  const root = within ? document.querySelector(within) : document;
-  let target;
-  if (selector) target = root.querySelector(selector);
-  else {
-    const CLICKABLE = 'button,a,label,[role=button],[role=radio],[role=checkbox],[role=tab],input';
-    target = [...root.querySelectorAll(CLICKABLE)]
-      .find((el) => norm(el.textContent).toLowerCase() === text.toLowerCase())
-      || [...root.querySelectorAll('*')]
-        .find((el) => el.children.length === 0 &&
-                      norm(el.textContent).toLowerCase() === text.toLowerCase());
-  }
-  target.scrollIntoView({ block: 'center' });
-  target.click();
-}, { within, text, selector });
+try {
+  await page.evaluate(({ within, text, selector }) => {
+    const norm = (s) => (s || '').replace(/\s+/g, ' ').trim();
+    const root = within ? document.querySelector(within) : document;
+    let target;
+    if (selector) target = root.querySelector(selector);
+    else {
+      const CLICKABLE = 'button,a,label,[role=button],[role=radio],[role=checkbox],[role=tab],input';
+      target = [...root.querySelectorAll(CLICKABLE)]
+        .find((el) => norm(el.textContent).toLowerCase() === text.toLowerCase())
+        || [...root.querySelectorAll('*')]
+          .find((el) => el.children.length === 0 &&
+                        norm(el.textContent).toLowerCase() === text.toLowerCase());
+    }
+    // The find above ran in a separate evaluation; the DOM may have moved on.
+    if (!root || !target) throw new Error('the control is gone');
+    target.scrollIntoView({ block: 'center' });
+    target.click();
+  }, { within, text, selector });
+} catch {
+  // The page can change between finding the control and clicking it. That
+  // is a stale read, not a crash: say so instead of dumping a stack trace.
+  die('the control disappeared before the click could land; the page changed under us. read the page again and retry');
+}
 
 await page.waitForTimeout(Number(args.settle || 500));
 

@@ -61,8 +61,11 @@ if (already) {
   }
   process.stderr.write('==> stale browser on CDP, restarting it\n');
   try {
-    const { execSync } = await import('node:child_process');
-    execSync(`pkill -f "user-data-dir=${BROWSER_PROFILE}"`, { stdio: 'ignore' });
+    const { execFileSync } = await import('node:child_process');
+    // Anchored to the end of the argument, so a profile whose path merely
+    // starts with this one (…/helium vs …/helium-2) is not killed as well.
+    // execFileSync also keeps the profile path out of a shell string.
+    execFileSync('pkill', ['-f', `user-data-dir=${BROWSER_PROFILE}($| )`], { stdio: 'ignore' });
   } catch { /* nothing matched, fine */ }
   await new Promise((r) => setTimeout(r, 2500));
 }

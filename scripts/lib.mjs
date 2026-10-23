@@ -138,27 +138,17 @@ export async function findPage(browser, allowedHosts, wantUrlPart) {
   return candidates[0];
 }
 
-const SUBMIT_PATTERN = /submit|send application|finalize|confirm and send/i;
+import { refusalFor } from './guards.mjs';
 
 /**
- * Hard refusal on anything that could commit the form. This is enforced here,
- * in code, rather than left to the caller's judgment.
+ * Hard refusal on anything that could commit the form, or that cannot take
+ * the text. This is enforced here, in code, rather than left to the
+ * caller's judgment.
+ *
+ * @param {import('./guards.mjs').FieldInfo | null} info
+ * @param {string} [text]
  */
-export function assertFillable(info) {
-  if (!info) die('element not found for that selector');
-  const tag = (info.tag || '').toLowerCase();
-  const type = (info.type || '').toLowerCase();
-
-  if (tag === 'button' || type === 'submit' || type === 'button' || type === 'image') {
-    die(`refusing to act on a <${tag}${type ? ` type=${type}` : ''}>. apply-fill fills, it never submits.`);
-  }
-  if (SUBMIT_PATTERN.test(info.text || '') || SUBMIT_PATTERN.test(info.name || '')) {
-    die(`refusing: element looks like a submit control ("${(info.text || info.name).slice(0, 60)}")`);
-  }
-  if (type === 'password') {
-    die('refusing to type into a password field');
-  }
-  if (!['textarea', 'input'].includes(tag) && !info.contentEditable) {
-    die(`refusing: <${tag}> is not a text input`);
-  }
+export function assertFillable(info, text = '') {
+  const refusal = refusalFor(info, text);
+  if (refusal) die(refusal);
 }

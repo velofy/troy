@@ -45,15 +45,15 @@ const info = await page.evaluate((sel) => {
     text: (el.innerText || el.value || '').slice(0, 200),
     contentEditable: el.isContentEditable,
     maxLength: el.getAttribute('maxlength') ? Number(el.getAttribute('maxlength')) : null,
+    // Refused up front by assertFillable: a disabled or readonly field can
+    // never hold what we write, so filling it can only fake a success.
+    disabled: el.disabled === true,
+    readOnly: el.readOnly === true,
     before: el.isContentEditable ? el.innerText : (el.value || ''),
   };
 }, selector);
 
-assertFillable(info);
-
-if (info.maxLength && text.length > info.maxLength) {
-  die(`answer is ${text.length} chars but the field caps at ${info.maxLength}. shorten it.`);
-}
+assertFillable(info, text);
 
 if (dryRun) {
   out({

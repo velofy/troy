@@ -84,6 +84,11 @@ const fields = await page.evaluate(
           name: el.getAttribute('name') || '',
           question: labelFor(el),
           maxLength: max ? Number(max) : null,
+          // Stated rather than inferred, so a target that does not skip them
+          // in its skipSelector still shows the agent which fields can take
+          // text at all.
+          disabled: el.disabled === true,
+          readOnly: el.readOnly === true,
           currentValue: value,
           currentLength: value.length,
           answered: value.trim().length > 0,

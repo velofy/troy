@@ -1,0 +1,42 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Troy fixture: field states</title>
+<style>
+  body{font-family:system-ui;max-width:720px;margin:40px auto;padding:0 20px}
+  label{display:block;margin:14px 0 4px;font-weight:600}
+</style>
+
+<!--
+  The states a form field can be in that make "fill it" a lie rather than an
+  action. Disabled and readonly fields cannot take text; maxlength="0" caps
+  the field at zero characters, which is a cap, not the absence of one. A
+  disabled button cannot respond to a click.
+-->
+
+<h1>Fixture: field states</h1>
+
+<label for="plain">Plain</label>
+<input id="plain" name="plain" type="text">
+
+<label for="ro">Readonly</label>
+<input id="ro" name="ro" type="text" readonly value="locked">
+
+<label for="dis">Disabled</label>
+<textarea id="dis" name="dis" disabled></textarea>
+
+<label for="cap0">Caps at zero</label>
+<input id="cap0" name="cap0" type="text" maxlength="0">
+
+<p>
+  <button type="button" id="stuck" disabled>Stuck</button>
+  <button type="button" id="toggle">Toggle</button>
+</p>
+
+<script>
+  // data-state moves on click, which is the evidence state.mjs's diff reads
+  // ("marked" controls), so a verified click has something to verify against.
+  document.getElementById('toggle').addEventListener('click', function () {
+    var el = this;
+    el.setAttribute('data-state', el.getAttribute('data-state') === 'on' ? 'off' : 'on');
+  });
+</script>
