@@ -9,6 +9,7 @@ import {
   writeEndpoint,
   readEndpoint,
   clearEndpoint,
+  pidAlive,
 } from '../src/browser/endpoint.js'
 
 const cleanups: Array<() => void> = []
@@ -57,10 +58,10 @@ describe('describeEndpoint', () => {
 })
 
 describe('writing and reading the endpoint', () => {
-  it('round-trips', async () => {
+  it('round-trips while the browser that wrote it is still running', async () => {
     const dir = await tempDir()
     const file = endpointFile(dir)
-    const endpoint = describeEndpoint({ port: 9222, pid: 42, version: '0.1.0', now: new Date(0) })
+    const endpoint = describeEndpoint({ port: 9222, pid: process.pid, version: '0.1.0', now: new Date(0) })
 
     writeEndpoint(file, endpoint)
     expect(readEndpoint(file)).toEqual(endpoint)
@@ -95,7 +96,7 @@ describe('writing and reading the endpoint', () => {
   it('is removed on quit, and removing it twice is harmless', async () => {
     const dir = await tempDir()
     const file = endpointFile(dir)
-    writeEndpoint(file, describeEndpoint({ port: 9222, pid: 42, version: '0.1.0' }))
+    writeEndpoint(file, describeEndpoint({ port: 9222, pid: process.pid, version: '0.1.0' }))
     expect(existsSync(file)).toBe(true)
 
     clearEndpoint(file)
@@ -106,10 +107,61 @@ describe('writing and reading the endpoint', () => {
   it('writes atomically so readers never see a half-written file', async () => {
     const dir = await tempDir()
     const file = endpointFile(dir)
-    const endpoint = describeEndpoint({ port: 9222, pid: 42, version: '0.1.0' })
+    const endpoint = describeEndpoint({ port: 9222, pid: process.pid, version: '0.1.0' })
     writeEndpoint(file, endpoint)
     expect(readEndpoint(file)).toEqual(endpoint)
     const leftovers = (await import('node:fs')).readdirSync(dir).filter((name) => name.includes('.tmp'))
     expect(leftovers).toEqual([])
+  })
+})
+
+describe('a file left by a crashed Troy', () => {
+  // clearEndpoint runs on will-quit, so a crash leaves the advertisement
+  // behind while nothing is listening. A reader that reports it as live
+  // sends an agent at a dead port and blames the browser for it.
+  it('reads as no endpoint once the recorded pid is gone', async () => {
+    const dir = await tempDir()
+    const file = endpointFile(dir)
+    const { spawn } = await import('node:child_process')
+    const dead = spawn(process.execPath, ['-e', ''])
+    await new Promise<void>((resolve) => dead.once('exit', () => resolve()))
+
+    writeEndpoint(file, describeEndpoint({ port: 9222, pid: dead.pid as number, version: '0.1.0' }))
+    expect(readEndpoint(file)).toBeNull()
+  })
+})
+
+describe('pidAlive', () => {
+  it('reports this process as alive', () => {
+    expect(pidAlive(process.pid)).toBe(true)
+  })
+
+  it('reports a pid nothing answers for as gone', () => {
+    // Far beyond any pid the kernel will hand out, so signal 0 can only
+    // fail with ESRCH.
+    expect(pidAlive(2 ** 31 - 1)).toBe(false)
+  })
+
+  it('counts a process we may not signal (someone else\u2019s) as alive', () => {
+    const eperm = (): void => {
+      throw Object.assign(new Error('not permitted'), { code: 'EPERM' })
+    }
+    expect(pidAlive(2 ** 31 - 1, eperm)).toBe(true)
+  })
+
+  it('counts ESRCH as gone', () => {
+    const esrch = (): void => {
+      throw Object.assign(new Error('no such process'), { code: 'ESRCH' })
+    }
+    expect(pidAlive(2 ** 31 - 1, esrch)).toBe(false)
+  })
+
+  it('refuses pid shapes that cannot name a Troy process, without signalling', () => {
+    const mustNotRun = (): void => {
+      throw new Error('signal must not be called')
+    }
+    expect(pidAlive(0, mustNotRun)).toBe(false)
+    expect(pidAlive(-1, mustNotRun)).toBe(false)
+    expect(pidAlive(2.5, mustNotRun)).toBe(false)
   })
 })

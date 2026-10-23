@@ -91,15 +91,42 @@ export function clearEndpoint(file) {
 }
 
 /**
+ * Is the process that wrote an endpoint still running.
+ *
+ * Signal 0 performs the permission and existence check without delivering
+ * anything. EPERM means the process exists but belongs to another user,
+ * which for liveness is the same as alive; only ESRCH means gone.
+ *
+ * @param {number} pid
+ * @param {(pid: number, signal?: number | NodeJS.Signals) => void} [signal]
+ * @returns {boolean}
+ */
+export function pidAlive(pid, signal = process.kill) {
+  if (!Number.isInteger(pid) || pid <= 0) return false
+  try {
+    signal(pid, 0)
+    return true
+  } catch (err) {
+    return /** @type {NodeJS.ErrnoException} */ (err).code === 'EPERM'
+  }
+}
+
+/**
  * Read it back, or null when Troy is not accepting agent connections.
  *
+ * A file left behind by a crashed Troy is not an advertisement: it points at
+ * a port nothing is listening on. The recorded pid is checked for liveness,
+ * so a stale file reads as "no endpoint" rather than as a live browser.
+ *
  * @param {string} file
+ * @param {{ pidAlive?: (pid: number) => boolean }} [options] injected for tests
  * @returns {Endpoint | null}
  */
-export function readEndpoint(file) {
+export function readEndpoint(file, { pidAlive: isAlive = pidAlive } = {}) {
   try {
     const parsed = JSON.parse(fs.readFileSync(file, 'utf8'))
     if (!parsed || typeof parsed.port !== 'number') return null
+    if (typeof parsed.pid !== 'number' || !isAlive(parsed.pid)) return null
     return parsed
   } catch {
     return null
