@@ -488,6 +488,11 @@ async function loadInTab(tab, url) {
  * @param {boolean} [force]
  */
 function showFailure(tab, url, reason, force = false) {
+  // A tab that has been closed cannot show a failure page, and every getter
+  // on a destroyed webContents throws (§3.3). A late failure for a closed
+  // tab must be dropped, not crash into the safety net and tell the user
+  // something went wrong with a tab they already closed on purpose.
+  if (!alive(tab)) return
   if (!force && tab.pending !== null && tab.pending !== url) return
   tab.failed = { url, reason }
   tab.favicon = null
