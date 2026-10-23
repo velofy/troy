@@ -176,11 +176,23 @@ describe('the window', () => {
   })
 
   it('lays the page out below the chrome and across the full window', async () => {
-    const snap = await snapshot()
+    // Set an explicit size rather than trusting the window manager's initial
+    // placement: on headless and CI displays the window is reconfigured after
+    // creation, so asserting on whatever the first placement happens to be
+    // races the environment. The invariant under test is the app's own: when
+    // the window's content area changes, the page view follows it.
+    await app.evaluate(({ BrowserWindow }, size) => {
+      BrowserWindow.getAllWindows()[0]?.setContentSize(size.width, size.height)
+    }, { width: 1000, height: 700 })
+    const snap = await until(
+      (s) => activeTab(s).bounds.width === 1000 && activeTab(s).bounds.height === 700 - 88,
+      'the page view to follow the window\u2019s new content size',
+    )
     const tab = activeTab(snap)
     expect(tab.bounds.y).toBe(88)
     expect(tab.bounds.x).toBe(0)
-    expect(tab.bounds.width).toBe(snap.contentBounds?.width)
+    expect(tab.bounds.width).toBe(1000)
+    expect(tab.bounds.height).toBe(700 - 88)
     expect(tab.visible).toBe(true)
   })
 })
