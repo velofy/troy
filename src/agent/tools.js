@@ -334,8 +334,17 @@ export function createTools(host, options = {}) {
       if (options.elements && host.context) {
         result.interactive = options.elements.register(result.interactive, host.context())
       }
-      while (result.interactive.length > 1 && JSON.stringify(result).length > MAX_TOOL_RESULT_CHARS) {
+      // Shrink in one proportional step (was: halve-and-restringify per step,
+      // O(n log n) serializations of the whole result on element-heavy pages).
+      let serialized = JSON.stringify(result).length
+      if (serialized > MAX_TOOL_RESULT_CHARS && result.interactive.length > 1) {
+        const keep = Math.max(1, Math.floor(result.interactive.length * (MAX_TOOL_RESULT_CHARS / serialized) * 0.9))
+        result.interactive = result.interactive.slice(0, keep)
+        serialized = JSON.stringify(result).length
+      }
+      while (result.interactive.length > 1 && serialized > MAX_TOOL_RESULT_CHARS) {
         result.interactive = result.interactive.slice(0, Math.ceil(result.interactive.length / 2))
+        serialized = JSON.stringify(result).length
       }
       if (reported > result.interactive.length || result.interactiveTruncated) {
         result.interactiveTruncated = true
@@ -499,7 +508,7 @@ export function createTools(host, options = {}) {
   }
 
   async function pageFill(/** @type {any} */ args) {
-    const text = String(args.text ?? '')
+    const text = String(args.text ?? args.value ?? '')
     if (!text.trim()) {
       return { error: 'refusing to fill an empty answer' }
     }
@@ -705,7 +714,7 @@ export function createTools(host, options = {}) {
    * continuing a recipe past a refusal is worse than stopping early.
    */
   async function pageAct(/** @type {any} */ args) {
-    const ops = Array.isArray(args.ops) ? args.ops : []
+    const ops = Array.isArray(args.ops) ? args.ops : Array.isArray(args.steps) ? args.steps : []
     if (ops.length === 0) return { error: 'nothing to do; ops is an empty list' }
     if (ops.length > MAX_ACT_OPS) return { error: `a batch is limited to ${MAX_ACT_OPS} operations` }
     const dispatch = /** @type {Record<string, (a: any) => Promise<any>>} */ ({

@@ -71,7 +71,8 @@ export function writeEndpoint(file, endpoint) {
   // Write to a pid-suffixed temp file and rename into place so a reader
   // never sees a half-written endpoint while Troy is starting or restarting.
   const tmp = `${file}.${process.pid}.tmp`
-  fs.writeFileSync(tmp, body)
+  // The file carries the agent-socket bearer token: owner-only, always.
+  fs.writeFileSync(tmp, body, { mode: 0o600 })
   fs.renameSync(tmp, file)
 }
 

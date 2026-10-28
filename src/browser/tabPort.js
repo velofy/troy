@@ -89,6 +89,9 @@ export function createTabPort(wc, opts) {
     epoch += 1
   }
   wc.on('did-navigate', onNavigation)
+  // A history/SPA navigation replaces the document under the same URL load:
+  // refs captured before it must go stale too, or they act on a new page.
+  wc.on('did-navigate-in-page', onNavigation)
   wc.on('render-process-gone', onNavigation)
 
   return {
@@ -150,6 +153,7 @@ export function createTabPort(wc, opts) {
       if (closed) return
       closed = true
       wc.removeListener('did-navigate', onNavigation)
+      wc.removeListener('did-navigate-in-page', onNavigation)
       wc.removeListener('render-process-gone', onNavigation)
       await queue.catch(() => undefined)
       if (attachedHere && !wc.isDestroyed() && wc.debugger.isAttached()) {

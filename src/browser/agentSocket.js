@@ -175,6 +175,7 @@ export async function createAgentSocket(deps) {
       case '/activate': {
         const id = Number(body.tabId)
         if (!Number.isFinite(id)) return { ok: false, error: 'no tabId' }
+        if (!deps.listTabs().some((t) => t.id === id)) return { ok: false, error: `no tab ${id}` }
         deps.selectTab(id)
         return { ok: true }
       }
@@ -183,12 +184,19 @@ export async function createAgentSocket(deps) {
         if (!ownedTabs.has(id)) {
           return { ok: false, error: 'this bridge session did not open that tab; refusing to close it' }
         }
+        if (!deps.listTabs().some((t) => t.id === id)) return { ok: false, error: `no tab ${id}` }
         deps.closeTab(id)
         ownedTabs.delete(id)
         return { ok: true }
       }
       case '/grant-origin': {
-        const origin = originOf(body.origin)
+        let origin = originOf(body.origin)
+        if (!origin) {
+          const tabId = body.tabId === undefined ? undefined : Number(body.tabId)
+          const resolved = deps.resolveTab(tabId)
+          const tabUrl = resolved?.webContents?.getURL?.() ?? deps.listTabs().find((t) => (tabId !== undefined ? t.id === tabId : t.active))?.url
+          origin = originOf(tabUrl)
+        }
         if (!origin) return { ok: false, error: 'grant needs an http(s) origin' }
         granted.add(origin)
         origins.add(origin)

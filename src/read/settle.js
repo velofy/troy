@@ -117,6 +117,10 @@ export async function settle(evaluate, opts = {}) {
 
   const started = now()
   const deadline = started + timeoutMs
+  // Escalating poll: a page that is already quiet should be released in
+  // ~40ms, not after two full 60ms polls; a page that is still moving backs
+  // off to pollMs so we do not tax it while it works.
+  let polls = 0
   let readyState = ''
   let fontsReady = false
   let quiet = 0
@@ -152,6 +156,7 @@ export async function settle(evaluate, opts = {}) {
     if (now() >= deadline) {
       return { settled: false, elapsedMs: now() - started, readyState, fontsReady, quietFrames: quiet }
     }
-    await sleep(pollMs)
+    polls += 1
+    await sleep(polls === 1 ? Math.min(12, pollMs) : polls === 2 ? Math.min(30, pollMs) : pollMs)
   }
 }
