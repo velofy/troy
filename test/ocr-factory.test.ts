@@ -24,7 +24,9 @@ describe('OCR engine selection', () => {
     }
   })
 
-  it('uses a packaged Apple Vision helper when one is present', async () => {
+  // The Vision helper only exists on macOS; the engine gates on the real
+  // host platform, so this case can only run there.
+  it.skipIf(process.platform !== 'darwin')('uses a packaged Apple Vision helper when one is present', async () => {
     const resources = await tempResources()
     const directory = path.join(resources, 'ocr')
     await mkdir(directory, { recursive: true })
