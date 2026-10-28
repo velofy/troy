@@ -48,7 +48,7 @@ const BUSY_PAGE = `<!doctype html>
 <title>Troy stress</title>
 <style>
   body { margin: 0; background: #14161a; color: #ddd; font: 13px system-ui; overflow: hidden; }
-  .box { position: absolute; width: 60px; height: 60px; border-radius: 8px; background: #d97757; }
+  .box { position: absolute; width: 60px; height: 60px; border-radius: 8px; background: #ee8a68; }
 </style>
 <div id="stage"></div>
 <script>

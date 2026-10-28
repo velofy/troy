@@ -43,7 +43,7 @@ body {
 
 .search:focus-within {
   background: #35363a;
-  border-color: #d97757;
+  border-color: #ee8a68;
 }
 
 .icon {
@@ -143,7 +143,7 @@ body {
 .row:first-of-type { border-top: 0; }
 .row b { display: block; font-weight: 500; font-size: 13px; color: #e8eaed; }
 .row small { display: block; margin-top: 3px; color: #9aa0a6; font-size: 11.5px; line-height: 1.5; }
-.row input[type="checkbox"] { flex: none; margin-top: 3px; accent-color: #d97757; width: 15px; height: 15px; }
+.row input[type="checkbox"] { flex: none; margin-top: 3px; accent-color: #ee8a68; width: 15px; height: 15px; }
 
 .caveat {
   margin: 12px 0 0;

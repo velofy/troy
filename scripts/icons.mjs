@@ -31,24 +31,37 @@ const run = promisify(execFile)
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..')
 const build = path.join(root, 'build')
 
-const PLATE = '#1a1c1e'
-const MARK = '#d97757'
+const PLATE = '#1c1d20'
+// Chakra brand mark (Downloads/troy-chakra): light coral on the dark plate.
+const MARK = '#ee8a68'
 
 /**
  * The icon at any size, as SVG. A 1024 canvas with the mark inset to 62% is
  * close to Apple's own optical sizing, and the 22.37% corner radius is the
  * squircle ratio macOS uses, so Troy lines up with the icons beside it.
  *
- * Flat mark (2026 revamp): one solid T, one aperture eye punched through the
- * stem. No strokes, no line-art aperture — the old 2.2-unit hairlines turned
- * to mush below 32px; this reads at 16px.
+ * Chakra mark (brand reference, 100-unit grid): an aperture ring r30 with
+ * three chords, 7.5 stroke, at 70% of the plate. Drawn at 716 units on the
+ * 1024 canvas (154 inset) so it lands at Apple's optical size and still
+ * reads at 16px.
  */
 function iconSvg() {
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
-  <rect x="0" y="0" width="1024" height="1024" rx="229" ry="229" fill="${PLATE}"/>
-  <g transform="translate(176 176) scale(21)">
-    <path d="M5.5 6 H26.5 V11.5 H18.75 V26 H13.25 V11.5 H5.5 Z" fill="${MARK}"/>
-    <circle cx="16" cy="18.75" r="2.1" fill="${PLATE}"/>
+  <defs>
+    <linearGradient id="plate" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2b2d31"/>
+      <stop offset="1" stop-color="${PLATE}"/>
+    </linearGradient>
+    <clipPath id="iris"><circle cx="50" cy="50" r="30"/></clipPath>
+  </defs>
+  <rect x="0" y="0" width="1024" height="1024" rx="229" ry="229" fill="url(#plate)"/>
+  <g transform="translate(154 154) scale(7.16)" fill="none" stroke="${MARK}" stroke-width="7.5" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="50" cy="50" r="30"/>
+    <g clip-path="url(#iris)">
+      <path d="M34.4 41 L82 41"/>
+      <path d="M65.6 41 L41.8 82.2"/>
+      <path d="M50 68 L26.2 26.8"/>
+    </g>
   </g>
 </svg>
 `
