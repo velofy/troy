@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { _electron as electron, type ElectronApplication } from 'playwright'
-import { mkdtemp, rm, writeFile, mkdir } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { readFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { createServer, type Server } from 'node:http'
@@ -36,7 +36,11 @@ let server: Server
 let base: string
 let endpoint: { agentPort: number; agentToken: string; port: number }
 
-async function post(route: string, body: unknown = {}, token?: string): Promise<any> {
+interface SocketTab { id: number; url: string; active?: boolean }
+interface InteractiveItem { ref?: string; placeholder?: string; ariaLabel?: string; text?: string }
+interface ToolReply { ok?: boolean; id?: number; url?: string; text?: string; error?: unknown; enabled?: boolean; tabs?: SocketTab[]; interactive?: InteractiveItem[]; items?: InteractiveItem[]; elements?: Array<{ selector?: string }>; pages?: unknown[] }
+
+async function post(route: string, body: unknown = {}, token?: string): Promise<ToolReply> {
   const res = await fetch(`http://127.0.0.1:${endpoint.agentPort}${route}`, {
     method: 'POST',
     headers: {
@@ -45,14 +49,14 @@ async function post(route: string, body: unknown = {}, token?: string): Promise<
     },
     body: JSON.stringify(body),
   })
-  return res.json()
+  return res.json() as Promise<ToolReply>
 }
 
 /** The first tab only exists once the chrome page has finished loading, so
  *  callers that arrive the instant the endpoint file lands must poll. */
-async function tabList(predicate: (tabs: any[]) => boolean, what: string): Promise<any[]> {
+async function tabList(predicate: (tabs: SocketTab[]) => boolean, what: string): Promise<SocketTab[]> {
   const deadline = Date.now() + 15_000
-  let tabs: any[] = []
+  let tabs: SocketTab[] = []
   while (Date.now() < deadline) {
     const res = await post('/tabs')
     tabs = res.tabs ?? []
@@ -113,7 +117,7 @@ describe('the agent socket', () => {
     const tabs = await tabList((t) => t.some((x) => x.id === opened.id), 'the opened tab')
     const mine = tabs.find((t: { id: number }) => t.id === opened.id)
     expect(mine).toBeTruthy()
-    expect(mine.active).toBe(false)
+    expect(mine!.active).toBe(false)
   })
 
   it('reads a tab and hands out refs that actions can use', async () => {
@@ -122,23 +126,23 @@ describe('the agent socket', () => {
     expect(mine).toBeTruthy()
 
     const deadline = Date.now() + 15_000
-    let read: any = {}
+    let read: ToolReply = {}
     while (Date.now() < deadline) {
-      read = await post('/tool', { tabId: mine.id, name: 'page_read' })
+      read = await post('/tool', { tabId: mine!.id, name: 'page_read' })
       if (read.ok && read.interactive?.length) break
       await new Promise((resolve) => setTimeout(resolve, 100))
     }
     expect(read.ok).toBe(true)
     expect(read.url).toContain(base)
-    const search = read.interactive.find((i: any) => /search/i.test(i.placeholder || i.ariaLabel || i.text))
+    const search = read.interactive?.find((i) => /search/i.test(i.placeholder || i.ariaLabel || i.text || ''))
     expect(search?.ref).toMatch(/^e\d+$/)
 
-    const filled = await post('/tool', { tabId: mine.id, name: 'page_fill', args: { ref: search.ref, text: 'wireless mouse' } })
+    const filled = await post('/tool', { tabId: mine!.id, name: 'page_fill', args: { ref: search!.ref, text: 'wireless mouse' } })
     expect(filled.error).toBeUndefined()
     expect(filled.ok).toBe(true)
 
     // Refs survive the action: the same ref resolves again without a re-read.
-    const text = await post('/tool', { tabId: mine.id, name: 'page_text', args: { ref: search.ref } })
+    const text = await post('/tool', { tabId: mine!.id, name: 'page_text', args: { ref: search!.ref } })
     expect(text.ok).toBe(true)
     expect(text.text).toBe('wireless mouse')
   })
@@ -146,11 +150,11 @@ describe('the agent socket', () => {
   it('finds elements by name without a full read', async () => {
     const tabs = await tabList((t) => t.some((x) => x.url.startsWith(base)), 'the fixture tab')
     const mine = tabs.find((t: { url: string }) => t.url.startsWith(base))
-    const found = await post('/tool', { tabId: mine.id, name: 'page_find', args: { query: 'cart' } })
+    const found = await post('/tool', { tabId: mine!.id, name: 'page_find', args: { query: 'cart' } })
     expect(found.ok).toBe(true)
-    expect(found.items.length).toBeGreaterThan(0)
-    expect(found.items[0].ref).toMatch(/^e\d+$/)
-    expect(found.items[0].text).toMatch(/cart/i)
+    expect(found.items!.length).toBeGreaterThan(0)
+    expect(found.items![0].ref).toMatch(/^e\d+$/)
+    expect(found.items![0].text).toMatch(/cart/i)
   })
 
   it('remembers what it read and recalls it', async () => {
@@ -159,19 +163,19 @@ describe('the agent socket', () => {
 
     const found = await post('/recall', { query: 'search' })
     expect(found.ok).toBe(true)
-    expect(found.elements.length).toBeGreaterThan(0)
-    expect(found.elements[0].selector).toBe('#q')
-    expect(found.pages.length).toBeGreaterThan(0)
+    expect(found.elements!.length).toBeGreaterThan(0)
+    expect(found.elements![0].selector).toBe('#q')
+    expect(found.pages!.length).toBeGreaterThan(0)
   })
 
   it('refuses to close a tab it did not open, and closes one it did', async () => {
     const tabs = await tabList((t) => t.some((x) => x.url.startsWith(base)) && t.some((x) => !x.url.startsWith(base)), 'both tabs')
     const foreign = tabs.find((t: { url: string }) => !t.url.startsWith(base))
-    const refused = await post('/close', { tabId: foreign.id })
+    const refused = await post('/close', { tabId: foreign!.id })
     expect(refused.ok).toBe(false)
 
     const mine = tabs.find((t: { url: string }) => t.url.startsWith(base))
-    const closed = await post('/close', { tabId: mine.id })
+    const closed = await post('/close', { tabId: mine!.id })
     expect(closed.ok).toBe(true)
   })
 })

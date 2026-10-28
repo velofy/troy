@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest'
-import { mkdtemp, rm, readFile } from 'node:fs/promises'
+import { mkdtemp, rm } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
