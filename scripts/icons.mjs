@@ -38,20 +38,17 @@ const MARK = '#d97757'
  * The icon at any size, as SVG. A 1024 canvas with the mark inset to 62% is
  * close to Apple's own optical sizing, and the 22.37% corner radius is the
  * squircle ratio macOS uses, so Troy lines up with the icons beside it.
+ *
+ * Flat mark (2026 revamp): one solid T, one aperture eye punched through the
+ * stem. No strokes, no line-art aperture — the old 2.2-unit hairlines turned
+ * to mush below 32px; this reads at 16px.
  */
 function iconSvg() {
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
   <rect x="0" y="0" width="1024" height="1024" rx="229" ry="229" fill="${PLATE}"/>
-  <g transform="translate(192 192) scale(20)">
-    <g fill="none" stroke="${MARK}" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-      <path d="M2.4 10.6 V2.4 H10.6"/>
-      <path d="M29.6 21.4 V29.6 H21.4"/>
-      <circle cx="16" cy="16" r="9.4"/>
-      <path d="M16 12 L24.14 11.3"/>
-      <path d="M12.54 18 L7.86 11.3"/>
-      <path d="M19.46 18 L16 25.4"/>
-    </g>
-    <path d="M16 12 L19.46 18 H12.54 Z" fill="${MARK}"/>
+  <g transform="translate(176 176) scale(21)">
+    <path d="M5.5 6 H26.5 V11.5 H18.75 V26 H13.25 V11.5 H5.5 Z" fill="${MARK}"/>
+    <circle cx="16" cy="18.75" r="2.1" fill="${PLATE}"/>
   </g>
 </svg>
 `
