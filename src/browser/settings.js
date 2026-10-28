@@ -18,6 +18,9 @@ import path from 'node:path'
  * @property {boolean} rememberHistory
  * @property {boolean} blockTrackers
  * @property {string} searchEngine
+ * @property {string} agentProvider
+ * @property {string} agentModel
+ * @property {boolean} agentMemory
  */
 
 /** @returns {Settings} */
@@ -27,6 +30,12 @@ export function defaults() {
     rememberHistory: false,
     blockTrackers: true,
     searchEngine: 'google',
+    agentProvider: 'anthropic',
+    agentModel: 'claude-opus-5',
+    // The page-memory graph holds what pages said and which controls worked;
+    // that is worth something to an agent and private enough that it is not
+    // collected unless asked for. Same rule as history: off deletes it.
+    agentMemory: false,
   }
 }
 
@@ -61,6 +70,9 @@ export function readSettings(file) {
     rememberHistory: typeof stored.rememberHistory === 'boolean' ? stored.rememberHistory : base.rememberHistory,
     blockTrackers: typeof stored.blockTrackers === 'boolean' ? stored.blockTrackers : base.blockTrackers,
     searchEngine: typeof stored.searchEngine === 'string' && stored.searchEngine ? stored.searchEngine : base.searchEngine,
+    agentProvider: typeof stored.agentProvider === 'string' && stored.agentProvider ? stored.agentProvider : base.agentProvider,
+    agentModel: typeof stored.agentModel === 'string' && stored.agentModel ? stored.agentModel : base.agentModel,
+    agentMemory: typeof stored.agentMemory === 'boolean' ? stored.agentMemory : base.agentMemory,
   }
 }
 

@@ -8,6 +8,7 @@ import {
   createSseParser,
   buildRequest,
   runAgentTurn,
+  trimTranscript,
 } from '../src/agent/llm.js'
 
 /**
@@ -128,6 +129,32 @@ function anthropicToolCall(id: string, name: string, argJsonParts: string[]): st
       data: { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json } },
     })),
     { event: 'content_block_stop', data: { type: 'content_block_stop', index: 0 } },
+    { event: 'message_stop', data: { type: 'message_stop' } },
+  ])
+}
+
+function anthropicThinkingToolCall(id: string, name: string, args: object): string {
+  return sseBody([
+    {
+      event: 'content_block_start',
+      data: { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '', signature: '' } },
+    },
+    {
+      event: 'content_block_delta',
+      data: { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'inspect safely' } },
+    },
+    {
+      event: 'content_block_delta',
+      data: { type: 'content_block_delta', index: 0, delta: { type: 'signature_delta', signature: 'signed-thinking' } },
+    },
+    {
+      event: 'content_block_start',
+      data: { type: 'content_block_start', index: 1, content_block: { type: 'tool_use', id, name, input: {} } },
+    },
+    {
+      event: 'content_block_delta',
+      data: { type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: JSON.stringify(args) } },
+    },
     { event: 'message_stop', data: { type: 'message_stop' } },
   ])
 }
@@ -324,6 +351,29 @@ describe('runAgentTurn', () => {
     expect(toolResult?.content[0]?.tool_use_id).toBe('tu1')
   })
 
+  it('replays Anthropic signed thinking blocks unchanged after a tool result', async () => {
+    const { impl, calls } = fakeFetch([
+      anthropicThinkingToolCall('tu1', 'page_read', {}),
+      anthropicText('Done.'),
+    ])
+    const { tools } = trackedTools()
+    const result = await runAgentTurn({
+      provider: 'anthropic',
+      apiKey: 'k',
+      transcript: [{ role: 'user', text: 'inspect' }],
+      tools,
+      fetchImpl: impl,
+    })
+    expect(result.status).toBe('done')
+    const second = calls[1]?.body.messages as Array<{ role: string; content: Array<Record<string, unknown>> }>
+    const assistant = second.find((message) => message.role === 'assistant')
+    expect(assistant?.content[0]).toEqual({
+      type: 'thinking',
+      thinking: 'inspect safely',
+      signature: 'signed-thinking',
+    })
+  })
+
   it('blocks a gated tool until consent, and a denial leaves the loop politely', async () => {
     const { impl, calls } = fakeFetch([anthropicToolCall('tu1', 'page_click', ['{"selector":"#buy"}'])])
     const { tools, runs, evaluates } = trackedTools()
@@ -428,5 +478,151 @@ describe('runAgentTurn', () => {
     })
     expect(result.status).toBe('error')
     expect(String(result.error)).toContain('401')
+  })
+
+  it('surfaces an Anthropic refusal stop reason instead of completing empty', async () => {
+    const refusal = sseBody([
+      {
+        event: 'message_delta',
+        data: {
+          type: 'message_delta',
+          delta: { stop_reason: 'refusal' },
+          stop_details: { type: 'refusal', category: 'test', explanation: 'request refused by provider policy' },
+        },
+      },
+      { event: 'message_stop', data: { type: 'message_stop' } },
+    ])
+    const { tools } = trackedTools()
+    const result = await runAgentTurn({
+      provider: 'anthropic',
+      apiKey: 'k',
+      transcript: [{ role: 'user', text: 'hi' }],
+      tools,
+      fetchImpl: async () => ({ ok: true, status: 200, body: streamOf(refusal) }),
+    })
+    expect(result.status).toBe('error')
+    expect(result.error).toContain('request refused')
+  })
+
+  it('retries a transient response before output and reports the retry', async () => {
+    let attempts = 0
+    const retries: number[] = []
+    const impl = async () => {
+      attempts += 1
+      if (attempts === 1) {
+        return {
+          ok: false,
+          status: 500,
+          headers: { get: () => '0' },
+          body: streamOf('temporary'),
+        }
+      }
+      return { ok: true, status: 200, body: streamOf(anthropicText('recovered')) }
+    }
+    const { tools } = trackedTools()
+    const result = await runAgentTurn({
+      provider: 'anthropic',
+      apiKey: 'k',
+      transcript: [{ role: 'user', text: 'hi' }],
+      tools,
+      fetchImpl: impl,
+      maxRetries: 1,
+      onRetry: (retry) => retries.push(retry.attempt),
+    })
+    expect(result.status).toBe('done')
+    expect(attempts).toBe(2)
+    expect(retries).toEqual([1])
+  })
+
+  it('uses exponential backoff when Retry-After is missing', async () => {
+    let attempts = 0
+    const delays: number[] = []
+    const { tools } = trackedTools()
+    const result = await runAgentTurn({
+      provider: 'anthropic',
+      apiKey: 'k',
+      transcript: [{ role: 'user', text: 'hi' }],
+      tools,
+      maxRetries: 1,
+      onRetry: (retry) => delays.push(retry.delayMs),
+      fetchImpl: async () => {
+        attempts += 1
+        return attempts === 1
+          ? { ok: false, status: 429, headers: { get: () => null }, body: streamOf('rate limited') }
+          : { ok: true, status: 200, body: streamOf(anthropicText('recovered')) }
+      },
+    })
+    expect(result.status).toBe('done')
+    expect(delays).toEqual([300])
+  })
+
+  it('cancels a pending provider request through AbortSignal', async () => {
+    const controller = new AbortController()
+    const impl = async (_url: string, init: { signal?: AbortSignal }) =>
+      new Promise((_resolve, reject) => {
+        const signal = init.signal
+        if (!signal) throw new Error('missing signal')
+        signal.addEventListener('abort', () => reject(signal.reason), { once: true })
+      })
+    const { tools } = trackedTools()
+    const running = runAgentTurn({
+      provider: 'anthropic',
+      apiKey: 'k',
+      transcript: [{ role: 'user', text: 'wait' }],
+      tools,
+      fetchImpl: impl,
+      signal: controller.signal,
+    })
+    controller.abort(new DOMException('stop', 'AbortError'))
+    expect((await running).status).toBe('cancelled')
+  })
+
+  it('treats a policy boundary as terminal and answers every parallel tool call', async () => {
+    const { impl } = fakeFetch([
+      anthropicToolCall('tu1', 'page_click', ['{"ref":"e1"}']),
+    ])
+    const tools = {
+      specs: [{ name: 'page_click', description: 'click', gated: true, input: { type: 'object', properties: {} } }],
+      run: async () => ({
+        error: 'outside scope',
+        blocked: true,
+        boundary: true,
+        origin: 'https://other.example',
+      }),
+    }
+    const result = await runAgentTurn({
+      provider: 'anthropic',
+      apiKey: 'k',
+      transcript: [{ role: 'user', text: 'click' }],
+      tools,
+      gate: async () => true,
+      fetchImpl: impl,
+    })
+    expect(result.status).toBe('boundary')
+    expect(result.origin).toBe('https://other.example')
+    expect(result.transcript.at(-1)?.role).toBe('tool')
+  })
+
+  it('trims whole user-led groups rather than orphaning tool results', () => {
+    const transcript = [
+      { role: 'user', text: 'old '.repeat(100) },
+      { role: 'assistant', text: '', toolCalls: [{ id: 'a', name: 'page_read', args: {} }] },
+      { role: 'tool', id: 'a', name: 'page_read', result: { content: 'x'.repeat(500) } },
+      { role: 'user', text: 'keep this' },
+      { role: 'assistant', text: 'kept answer' },
+    ]
+    expect(trimTranscript(transcript, 120)).toEqual([
+      { role: 'user', text: 'keep this' },
+      { role: 'assistant', text: 'kept answer' },
+    ])
+  })
+
+  it('keeps an oversized sole user-led group intact', () => {
+    const group = [
+      { role: 'user', text: 'do the task' },
+      { role: 'assistant', text: '', toolCalls: [{ id: 'a', name: 'page_read', args: {} }] },
+      { role: 'tool', id: 'a', name: 'page_read', result: { content: 'x'.repeat(5000) } },
+    ]
+    expect(trimTranscript(group, 100).map((entry) => entry.role)).toEqual(['user', 'assistant', 'tool'])
   })
 })

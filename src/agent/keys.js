@@ -87,6 +87,7 @@ export function setKey(file, crypt, provider, key) {
  * @returns {string | null}
  */
 export function getKey(file, crypt, provider) {
+  if (!crypt.isEncryptionAvailable()) return null
   const stored = readStore(file)[provider]
   if (!stored) return null
   try {

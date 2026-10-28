@@ -98,9 +98,9 @@ describe('resolveOmnibox', () => {
   })
 
   it('hands another application its own scheme instead of loading it', () => {
-    expect(resolveOmnibox('mailto:someone@example.com')).toEqual({
+    expect(resolveOmnibox('mailto:anishfyi@gmail.com')).toEqual({
       kind: 'external',
-      url: 'mailto:someone@example.com',
+      url: 'mailto:anishfyi@gmail.com',
     })
     expect(resolveOmnibox('ssh://build-box')).toEqual({ kind: 'external', url: 'ssh://build-box' })
   })

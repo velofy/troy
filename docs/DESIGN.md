@@ -294,7 +294,7 @@ are invisible from the source tree.
 version so the site can link to `releases/latest/download/<name>` permanently.
 
 Tagging `v*` builds three artifacts on their own runners, smoke-tests each, and
-publishes a release. Distribution is the Homebrew cask at `velofy/homebrew-tap`,
+publishes a release. Distribution is the Homebrew cask at `anishfyi/homebrew-tap`,
 which clears the quarantine flag so an un-notarised app installs in one command.
 
 `release/` is a build directory, not an install. It once held a months-old Intel
@@ -333,9 +333,6 @@ on demand, Tesseract elsewhere, and the caller never picks.
 
 ## 10. Known gaps
 
-- **`rememberHistory` does nothing.** The setting is stored, toggled and shown,
-  but no module reads it and no history is written. Build the store or hide the
-  control.
 - **No Intel Mac behavioural coverage.** Packaged and launched under Rosetta,
   not exercised on Intel hardware.
 - **Extensions have no UI.** They load; nothing lists them.

@@ -47,7 +47,9 @@ describe('page_read on a real page', () => {
       <a href="/x">a link</a>
       <button id="go-on">Go on</button>
       <input id="city" name="city" value="Pune">
-      <input type="password" id="pw" value="hunter2">`)
+      <input type="password" id="pw" value="hunter2">
+      <label for="api">API key</label><input id="api" value="sk-live-should-not-leave">
+      <input name="code" placeholder="One-time code" value="123456">`)
     const result = await tools.run('page_read', {})
     expect(result.error).toBeUndefined()
     expect(result.headingCount).toBe(1)
@@ -60,8 +62,10 @@ describe('page_read on a real page', () => {
       )
       expect(matches, `selector ${el.selector} must be unique`).toBe(1)
     }
-    // A password field may be listed, but its value must never leave the page.
+    // Sensitive fields may be listed, but their values must never leave the page.
     expect(JSON.stringify(result)).not.toContain('hunter2')
+    expect(JSON.stringify(result)).not.toContain('sk-live-should-not-leave')
+    expect(JSON.stringify(result)).not.toContain('123456')
   })
 })
 

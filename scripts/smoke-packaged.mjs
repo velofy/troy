@@ -19,7 +19,7 @@
 // Override with TROY_SMOKE_TIMEOUT if you need to.
 
 import { _electron as electron } from 'playwright'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import http from 'node:http'
 import { fileURLToPath } from 'node:url'
@@ -48,6 +48,37 @@ function findExecutable() {
   return null
 }
 
+function resourcesDirectory(executable) {
+  if (process.platform === 'darwin') return path.resolve(path.dirname(executable), '..', 'Resources')
+  return path.join(path.dirname(executable), 'resources')
+}
+
+function verifyNativeAssets(executable) {
+  const resources = resourcesDirectory(executable)
+  const voiceBinary = path.join(resources, 'voice', process.platform === 'win32' ? 'whisper-cli.exe' : 'whisper-cli')
+  const voiceModel = path.join(resources, 'voice', 'ggml-tiny.bin')
+  if (!existsSync(voiceBinary)) fail(`offline voice binary is missing at ${voiceBinary}`)
+  if (!existsSync(voiceModel)) fail(`offline voice model is missing at ${voiceModel}`)
+  const voiceManifest = path.join(resources, 'voice', 'manifest.json')
+  if (!existsSync(voiceManifest)) fail(`offline voice manifest is missing at ${voiceManifest}`)
+  const manifest = JSON.parse(readFileSync(voiceManifest, 'utf8'))
+  const expectedArch = process.env.TROY_TARGET_ARCH || process.arch
+  if (manifest.platform !== process.platform || manifest.arch !== expectedArch || manifest.staticLink !== true) {
+    fail(`offline voice manifest targets ${manifest.platform}-${manifest.arch} (static=${manifest.staticLink}), expected ${process.platform}-${expectedArch} static`)
+  }
+  if (process.platform === 'darwin') {
+    const vision = path.join(resources, 'ocr', 'troy-vision')
+    const visionManifest = path.join(resources, 'ocr', 'manifest.json')
+    if (!existsSync(vision)) fail(`Apple Vision helper is missing at ${vision}`)
+    if (!existsSync(visionManifest)) fail(`Apple Vision manifest is missing at ${visionManifest}`)
+    const ocr = JSON.parse(readFileSync(visionManifest, 'utf8'))
+    if (ocr.platform !== 'darwin' || ocr.arch !== expectedArch) {
+      fail(`Apple Vision manifest targets ${ocr.platform}-${ocr.arch}, expected darwin-${expectedArch}`)
+    }
+  }
+  console.log('smoke: native voice and OCR resources are present')
+}
+
 function fail(message) {
   console.error(`smoke: FAIL ${message}`)
   process.exit(1)
@@ -70,6 +101,7 @@ function serveOnce() {
 const executable = findExecutable()
 if (!executable) fail(`no packaged executable found. Run "npm run pack" first.`)
 if (!existsSync(executable)) fail(`${executable} does not exist`)
+verifyNativeAssets(executable)
 
 console.log(`smoke: launching ${path.relative(root, executable)}`)
 
@@ -83,6 +115,25 @@ try {
   const title = await chrome.title()
   if (title !== 'Troy') fail(`window title was "${title}", expected "Troy"`)
   console.log('smoke: window opened, chrome rendered')
+
+  await chrome.evaluate(() => window.troy.togglePanel())
+  await chrome.waitForSelector('#agentpanel:not([hidden])', { timeout: TIMEOUT })
+  const voice = await chrome.evaluate(() => window.troy.voiceState())
+  if (!voice.available) fail(`packaged offline voice reported unavailable: ${voice.reason}`)
+  await chrome.evaluate(() => window.troy.togglePanel())
+  console.log('smoke: agent panel opened and found offline voice')
+
+  await app.evaluate(({ Menu }) => Menu.getApplicationMenu()?.getMenuItemById('command-palette')?.click())
+  const paletteLoaded = await waitFor(async () => {
+    const urls = await app.evaluate(({ webContents }) => webContents.getAllWebContents().map((wc) => wc.getURL()))
+    return urls.some((url) => url.includes('palette.html'))
+  }, 'the command palette to load')
+  if (!paletteLoaded) fail('the packaged command palette did not load')
+  await app.evaluate(({ webContents }) => {
+    const palette = webContents.getAllWebContents().find((wc) => wc.getURL().includes('palette.html'))
+    return palette?.executeJavaScript(`window.troyPalette.close()`, true)
+  })
+  console.log('smoke: command palette opened from the packaged app')
 
   // The new tab page is a file inside the asar. If asar packaging broke the
   // renderer paths, this is where it shows up.

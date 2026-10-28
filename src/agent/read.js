@@ -6,10 +6,11 @@
 // and acting: the model is only ever allowed to click or fill things it was
 // handed here, which closes the door on hallucinated selectors.
 //
-// A password input may be listed (the model needs to know one exists so it
-// does not go hunting), but its value never leaves the page. Everything else
-// reports its current value, because "what did I already type" is the first
-// question any form-filling turn asks.
+// A sensitive input may be listed (the model needs to know one exists so it
+// does not go hunting), but its value never leaves the page. Ordinary fields
+// report their current value because "what did I already type" is useful.
+
+import { ELEMENT_DESCRIPTOR_EXPRESSION, SELECTOR_FOR_EXPRESSION } from './element-descriptor.js'
 
 /** Hard cap on the text preview, in characters. The full fused read lives
  * elsewhere; this is the model's working snapshot, not an archive. */
@@ -23,53 +24,24 @@ export const READ_PAGE_EXPRESSION = `(() => {
   const raw = (body.textContent || '').trim()
   const degraded = painted.length === 0 && raw.length > 0
 
-  // A stable, unique selector per element. An id wins outright; without one,
-  // the element's position among its tag siblings is the fallback, which
-  // survives styling changes that would break class names.
-  function selectorFor(el) {
-    if (el.id) return '#' + CSS.escape(el.id)
-    const parent = el.parentElement
-    if (!parent) return el.tagName.toLowerCase()
-    const sameTag = Array.from(parent.children).filter((c) => c.tagName === el.tagName)
-    const index = sameTag.indexOf(el) + 1
-    const base = selectorFor(parent)
-    return base + ' > ' + el.tagName.toLowerCase() + ':nth-of-type(' + index + ')'
-  }
+  // A stable, unique selector per element, shared with page_find.
+  const selectorFor = ${SELECTOR_FOR_EXPRESSION}
 
-  function describe(el) {
-    const tag = el.tagName.toLowerCase()
-    const type = tag === 'input' ? (el.getAttribute('type') || 'text') : ''
-    const editable = tag === 'textarea' || (el.isContentEditable === true) ||
-      (tag === 'input' && !['button', 'submit', 'checkbox', 'radio', 'file', 'hidden', 'password', 'range'].includes(type))
-    return {
-      selector: selectorFor(el),
-      tag,
-      type,
-      name: el.getAttribute('name') || '',
-      text: (el.innerText || '').trim().slice(0, 120),
-      value: type === 'password' ? '' : String(el.value ?? ''),
-      disabled: Boolean(el.disabled),
-      // A typeless button only defaults to submitting when a form is
-      // actually behind it; outside a form it is inert, and calling it
-      // dangerous would refuse half the harmless buttons on the web.
-      defaultSubmit: ((tag === 'button' && !type) || type === 'submit') &&
-        Boolean(el.closest('form')),
-      editable,
-      maxLength: el.maxLength >= 0 ? el.maxLength : null,
-      readOnly: Boolean(el.readOnly),
-      label: (el.labels && el.labels[0] ? el.labels[0].innerText.trim() : '') ||
-        el.getAttribute('aria-label') || '',
-    }
-  }
+  const describe = ${ELEMENT_DESCRIPTOR_EXPRESSION}
 
   const interactive = []
   const seen = new Set()
+  let interactiveTruncated = false
   for (const el of body.querySelectorAll('a[href], button, input, textarea, select, [contenteditable=""], [contenteditable="true"]')) {
     if (seen.has(el)) continue
     seen.add(el)
     const rect = el.getBoundingClientRect()
     if (rect.width <= 0 && rect.height <= 0) continue
-    interactive.push(describe(el))
+    if (interactive.length >= 500) {
+      interactiveTruncated = true
+      break
+    }
+    interactive.push({ selector: selectorFor(el), ...describe(el) })
   }
 
   return JSON.stringify({
@@ -82,6 +54,7 @@ export const READ_PAGE_EXPRESSION = `(() => {
     textPreview: (painted || raw).slice(0, ${PREVIEW_CHARS}),
     degraded,
     interactive,
+    interactiveTruncated,
   })
 })()`
 
@@ -123,5 +96,6 @@ export function normaliseReadResult(raw, fallbacks = {}) {
     textPreview: String(parsed.textPreview ?? ''),
     degraded: Boolean(parsed.degraded),
     interactive: Array.isArray(parsed.interactive) ? parsed.interactive : [],
+    interactiveTruncated: Boolean(parsed.interactiveTruncated),
   }
 }
