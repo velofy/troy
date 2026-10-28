@@ -25,6 +25,9 @@ files:
   - src/browser/**/*
   - src/read/**/*
   - src/agent/**/*
+  # main.js imports ../voice/whisper.js; omitting this made every packaged
+  # build die at import time with ERR_MODULE_NOT_FOUND (v0.1.6 release).
+  - src/voice/**/*
   - build/icon.png
   - '!**/*.map'
   - '!**/*.ts'
