@@ -9,7 +9,7 @@
 <body>
   <div class="tabstrip" id="tabstrip">
     <div class="traffic-spacer"></div>
-    <div class="tabs" id="tabs"></div>
+    <div class="tabs" id="tabs" role="tablist" aria-label="Open tabs"></div>
     <button class="newtab" id="newtab" title="New tab (Cmd T)" aria-label="New tab">
       <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3.4v9.2M3.4 8h9.2"/></svg>
     </button>
@@ -51,17 +51,60 @@
 
   <p class="notice" id="notice" role="status" hidden></p>
 
-  <aside class="panel" id="agentpanel" hidden>
+  <aside class="panel" id="agentpanel" aria-label="Troy agent" hidden>
     <div class="panel-head">
       <span class="panel-title">agent</span>
-      <button id="readbtn" class="readbtn">read this page</button>
+      <div class="panel-actions">
+        <button id="readbtn" class="panel-action">read page</button>
+        <button id="clearagent" class="panel-action">clear</button>
+      </div>
     </div>
-    <div class="panel-body" id="panelbody">
-      <p class="hint">Troy reads the tab you are looking at. Structure comes from
-      the DOM, and the regions the DOM cannot explain get read from pixels.</p>
+
+    <section class="agent-settings" aria-label="Agent settings">
+      <label>provider
+        <select id="agentprovider">
+          <option value="anthropic">Anthropic</option>
+          <option value="openai">OpenAI</option>
+          <option value="openrouter">OpenRouter</option>
+        </select>
+      </label>
+      <label>model
+        <input id="agentmodel" type="text" autocomplete="off" spellcheck="false" maxlength="160">
+      </label>
+      <form id="keyform" class="key-row">
+        <label class="key-field">API key
+          <input id="agentkey" type="password" autocomplete="off" spellcheck="false" maxlength="4096" placeholder="stored with OS encryption">
+        </label>
+        <button type="submit" class="panel-action">save</button>
+        <button type="button" id="clearkey" class="panel-action">remove</button>
+      </form>
+      <p id="keystatus" class="setting-status" role="status"></p>
+    </section>
+
+    <div id="agentscopes" class="agent-scopes" aria-label="Allowed origins"></div>
+    <div id="agentstatus" class="agent-status" role="status" aria-live="polite"></div>
+    <div id="conversation" class="conversation" role="log" aria-live="off" aria-label="Agent conversation"></div>
+    <div id="agentboundary" class="agent-boundary" hidden>
+      <p id="boundarytext"></p>
+      <button id="grantorigin" class="panel-action">allow for this session</button>
     </div>
+    <details id="readpreview" class="read-preview" hidden>
+      <summary>page read</summary>
+      <pre id="readoutput"></pre>
+    </details>
+
+    <form id="agentcomposer" class="agent-composer">
+      <label class="sr-only" for="agentinput">Tell Troy what to do</label>
+      <textarea id="agentinput" rows="3" maxlength="8000" placeholder="Ask Troy to browse this tab…"></textarea>
+      <div class="composer-actions">
+        <button type="button" id="micbtn" class="micbtn" aria-pressed="false" disabled title="Push-to-talk is installed in the next step">hold to talk</button>
+        <button type="submit" id="agentsend" class="sendbtn">send</button>
+      </div>
+      <button type="button" id="agentstop" class="stopbtn" hidden>stop agent <span>⌘.</span></button>
+    </form>
   </aside>
 
   <script src="chrome.js"></script>
+  <script src="agent-panel.js"></script>
 </body>
 </html>

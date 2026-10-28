@@ -5,8 +5,6 @@
   "author": {
     "name": "anishfyi"
   },
-  "homepage": "https://velofy.co/troy/",
-  "repository": "https://github.com/velofy/troy",
   "license": "MIT",
   "keywords": ["browser", "cdp", "playwright", "automation", "forms", "agent"]
 }

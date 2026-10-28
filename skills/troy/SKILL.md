@@ -21,13 +21,19 @@ npm run browser -- --cdp-port=9333         # from a checkout
 It then writes where it is, so nothing has to be copied by hand:
 
 ```bash
+# macOS
 cat "$HOME/Library/Application Support/Troy/agent-endpoint.json"
+# Linux
+cat "${XDG_CONFIG_HOME:-$HOME/.config}/Troy/agent-endpoint.json"
+# Windows PowerShell
+Get-Content "$env:APPDATA\Troy\agent-endpoint.json"
 # { "port": 9333, "httpEndpoint": "http://127.0.0.1:9333", ... }
 ```
 
-Read that file to find the port. If it is missing, Troy is running without the
-bridge and you should ask the user to restart it with `--cdp-port`, rather
-than starting a second copy and losing their session.
+Read the platform's file to find the port. `TROY_ENDPOINT_FILE` can override
+its location for a non-default profile. If it is missing, Troy is running
+without the bridge and you should ask the user to restart it with
+`--cdp-port`, rather than starting a second copy and losing their session.
 
 ## Work the page
 

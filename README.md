@@ -1,8 +1,5 @@
 <p align="center">
-  <a href="https://velofy.co/troy/"><picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/velofy/troy/main/assets/tile-dark.svg">
-    <img alt="Troy" src="https://raw.githubusercontent.com/velofy/troy/main/assets/tile-light.svg" width="360">
-  </picture></a>
+  <img src="assets/logo.svg" alt="" width="72" height="72">
 </p>
 
 <h1 align="center">troy</h1>
@@ -10,15 +7,15 @@
 <p align="center">A browser an agent can actually read and drive.</p>
 
 <p align="center">
-  <a href="https://github.com/velofy/troy/actions/workflows/ci.yml"><img src="https://github.com/velofy/troy/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
-  <a href="https://github.com/velofy/troy/releases/latest"><img src="https://img.shields.io/github/v/release/velofy/troy" alt="Latest release"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT license"></a>
-</p>
-
-<p align="center">
-  <b>Docs: <a href="https://velofy.co/troy/">velofy.co/troy</a></b>
+  <a href="https://anishfyi.com/troy/">anishfyi.com/troy</a>
   &nbsp;·&nbsp;
-  <a href="https://github.com/velofy/troy/releases/latest">Download</a>
+  <a href="https://github.com/velofy/troy/releases/latest">download</a>
+  &nbsp;·&nbsp;
+  <a href="docs/PRD.md">PRD</a>
+  &nbsp;·&nbsp;
+  <a href="docs/DESIGN.md">design</a>
+  &nbsp;·&nbsp;
+  MIT
 </p>
 
 ---
@@ -26,22 +23,13 @@
 <h3 align="center">Sponsors</h3>
 
 <p align="center">
-  <a href="https://go.nodemaven.com/troyreadmeoct" title="NodeMaven: best proxy for web scraping and automation">
-    <img src="https://velofy.co/images/sponsors/nodemaven-banner.webp" alt="NodeMaven: best proxy for web scraping and automation with the highest quality IP" width="720">
+  <a href="https://nodemaven.com/?a_aid=veronika&utm_source=veronika&utm_medium=affiliate&utm_campaign=troy_readme_sep2026&utm_term=github" title="NodeMaven - residential and mobile proxies">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/velofy/troy/main/assets/sponsors/nodemaven-dark.svg">
+      <img src="https://raw.githubusercontent.com/velofy/troy/main/assets/sponsors/nodemaven-light.svg" alt="NodeMaven" height="40">
+    </picture>
   </a>
 </p>
-
-**[NodeMaven](https://go.nodemaven.com/troyreadmeoct)**: the most efficient proxy provider for web scraping and automation, with the highest quality IPs on the market.
-
-Why [NodeMaven](https://go.nodemaven.com/troyreadmeoct)?
-
-- ZIP targeting
-- 99.9% uptime
-- IP filtering: every proxy has a fraud score under 97%
-- No KYC required
-- Free tools: Proxy Bandwidth Checker, Meta Tag Checker, IP Lookup and more
-
-Codes for Troy users: `TROY35` for 35% off mobile and residential proxies, `TROY40` for 40% off ISP (static) proxies.
 
 ---
 
@@ -53,23 +41,26 @@ automating are behind a login, so the fresh browser is the wrong browser. Troy
 inverts that: you browse in it, and an agent joins the session you already have.
 
 > **Status.** The browser is real, installable, and tested on macOS, Windows and
-> Linux. The reading pipeline this project is named for, which fuses DOM
-> structure with OCR of the regions the DOM cannot explain, is **not built yet**.
-> Until it lands the agent panel reads a page from the DOM alone. See
+> Linux. The live reading pipeline now settles the page, extracts visible DOM
+> structure, finds regions the DOM cannot explain, and fuses the result. A real
+> OCR backend is not wired in yet, so pixel-only regions are reported honestly
+> as untranscribed instead of being silently omitted. See
 > [What is not built](#what-is-not-built).
 
 ## Install
 
 ```sh
-brew install --cask velofy/tap/troy
+brew install --cask anishfyi/tap/troy
 ```
 
-Or download a build from the [latest release](https://github.com/velofy/troy/releases/latest):
+Or take a file directly:
 
-- macOS, Apple silicon: [Troy-mac-arm64.dmg](https://github.com/velofy/troy/releases/latest/download/Troy-mac-arm64.dmg)
-- macOS, Intel: [Troy-mac-x64.dmg](https://github.com/velofy/troy/releases/latest/download/Troy-mac-x64.dmg)
-- Windows, installer: [Troy-windows-setup-x64.exe](https://github.com/velofy/troy/releases/latest/download/Troy-windows-setup-x64.exe)
-- Windows, portable: [Troy-windows-portable-x64.exe](https://github.com/velofy/troy/releases/latest/download/Troy-windows-portable-x64.exe)
+| | |
+|---|---|
+| macOS, Apple silicon | [Troy-mac-arm64.dmg](https://github.com/velofy/troy/releases/latest/download/Troy-mac-arm64.dmg) |
+| macOS, Intel | [Troy-mac-x64.dmg](https://github.com/velofy/troy/releases/latest/download/Troy-mac-x64.dmg) |
+| Windows, installer | [Troy-windows-setup-x64.exe](https://github.com/velofy/troy/releases/latest/download/Troy-windows-setup-x64.exe) |
+| Windows, portable | [Troy-windows-portable-x64.exe](https://github.com/velofy/troy/releases/latest/download/Troy-windows-portable-x64.exe) |
 
 Troy is ad-hoc signed but not notarised, and there are no plans to be. Downloaded
 by hand that costs you one gesture on first launch: Control-click then Open on
@@ -77,9 +68,6 @@ macOS, or More info then Run anyway on Windows. The Homebrew cask clears the
 quarantine flag for you, so installing that way costs nothing. Ad-hoc signing is
 not cosmetic: without it, Apple silicon refuses to launch the app at all and
 reports it as damaged.
-
-To run from source, see [Development](#development). Full instructions:
-[velofy.co/troy/installation](https://velofy.co/troy/installation/).
 
 ## Driving it from an agent
 
@@ -90,15 +78,51 @@ unrestricted control of every tab you are signed into.
 open -a Troy --args --cdp-port=9333     # or: npm run browser -- --cdp-port=9333
 ```
 
-Troy then writes where it is, so nothing has to be copied between terminals:
+An agent launch must not take your screen, so a launch that exists for the
+bridge shows **nothing at all** — no window, no focus grab — until you ask for
+it. The app runs and the bridge answers; the window only appears when you
+click the dock icon. Pass `--background` if you want a visible-but-unfocused
+window instead, `--foreground` for a normal launch. `TROY_LAUNCH` takes the
+same three values (`hidden`, `background`, `foreground`) for launches that
+cannot pass argv.
+
+### The agent socket and the `troy` CLI
+
+Every agent launch (or `--agent` alone, without a debugging port) opens the
+agent socket: a token-gated loopback endpoint that speaks the same tool
+contract the in-app agent uses — reads, ref-based actions, tab management and
+page memory, with the same refusals. `bin/troy.mjs` is the CLI on top of it:
 
 ```sh
-cat "$HOME/Library/Application Support/Troy/agent-endpoint.json"
-# { "port": 9333, "httpEndpoint": "http://127.0.0.1:9333", ... }
+troy status
+troy open https://example.com          # background tab; prints its id
+troy find "add to cart" --tab 2        # matching elements, as refs
+troy fill e4 "blue anorak" --tab 2
+troy act '[{"op":"click","ref":"e4"}]' --tab 2
+troy read --tab 2 --since              # only what changed since last read
+troy recall "checkout button"          # what this browser already learned
 ```
 
-Attach with anything that speaks CDP. This gives you the tabs already open, not
-a new browser:
+Element refs survive actions inside a document and die at navigation, which
+is the honest contract. `troy read --since` returns only what moved. `troy
+recall` answers from the page-memory graph (settings → "Remember what the
+agent learns", off by default) instead of making you re-read.
+
+Troy then writes where it is, so nothing has to be copied between terminals.
+The endpoint file lives under Troy's application-data directory:
+
+```sh
+# macOS
+cat "$HOME/Library/Application Support/Troy/agent-endpoint.json"
+# Linux
+cat "${XDG_CONFIG_HOME:-$HOME/.config}/Troy/agent-endpoint.json"
+# Windows PowerShell
+Get-Content "$env:APPDATA\Troy\agent-endpoint.json"
+# { "port": 9333, "agentPort": 58893, "agentToken": "...", ... }
+```
+
+Attach with anything that speaks CDP for raw control — the agent socket for
+the tool contract. This gives you the tabs already open, not a new browser:
 
 ```js
 import { chromium } from 'playwright'
@@ -151,50 +175,37 @@ settings panel says so rather than implying otherwise.
 **Extensions.** Unpacked Chrome extensions load from `<profile>/extensions/` at
 startup. No store, nothing fetched remotely, `allowFileAccess` off.
 
-**It is fast, and that is enforced.** `npm run stress` opens a set of busy tabs
-(twelve by default), each animating and streaming requests, then switches tabs,
-types and reloads while counting frames in the chrome. It fails the run below
-60fps, if the 95th percentile frame misses budget, or if any frame stalls past
-100ms.
+**It is fast, and that is enforced.** `npm run stress` opens sixteen tabs each
+animating and streaming requests, then switches tabs, types and reloads while
+counting frames in the chrome. It fails the run below 60fps, if the 95th
+percentile frame misses budget, or if any frame stalls past 100ms.
 
 ## What is not built
 
-The read pipeline, which is the thing the name is about:
+The live tab already runs the settle, extract, cover, transcribe, and fuse
+pipeline. The remaining reading and action gaps are narrower:
 
-- **settle, extract, cover, ocr, fuse.** Take structure from the DOM and pixels
-  from OCR, deciding by itself which regions need which, so a plain article
-  costs zero OCR and a canvas dashboard gets its numbers read
-- `troy read <url>` as a CLI, markdown or `--json`
-- Apple Vision on macOS, Tesseract elsewhere, behind one interface
-- the verified action layer ported from `scripts/*.mjs` to TypeScript
+- Apple Vision on macOS and Tesseract elsewhere behind the existing OCR
+  interface. Until then, pixel-only regions are marked untranscribed.
+- A packaged `troy read <url>` executable. Developers can already run
+  `node scripts/read.mjs [--url <url>] [--json]` from a checkout.
+- The verified action layer ported from `scripts/*.mjs` to TypeScript.
 
-[`docs/DESIGN.md` §9](docs/DESIGN.md) describes the pipeline, and
-[the original spec](docs/superpowers/specs/2026-08-07-troy-design.md) has it in
-full. Treat both as intent, not as documentation of behaviour that exists. The
-[roadmap](https://velofy.co/troy/roadmap/) collects every planned item in one
-place.
+[`docs/DESIGN.md` §9](docs/DESIGN.md) describes the pipeline architecture, and
+[the original spec](docs/superpowers/specs/2026-08-07-troy-design.md) records
+its full intended shape. Sections that still call the whole pipeline planned
+are historical and should not override the running code in `src/read/` and
+`src/browser/readPort.js`.
 
 Also deliberately absent for now: omnibox suggestions, bookmarks, find-in-page,
 context menus, tab reordering, and any browser engine other than Chromium.
 
-One thing worth calling out because it is a live gap rather than a plan: the
-**Remember history** switch on the new tab page stores and toggles, but nothing
-reads it yet, so turning it on records nothing. See
-[`docs/PRD.md` §9](docs/PRD.md).
+**Remember history** on the new tab page is real: turn it on and visits are
+recorded to `history.json` in the profile, newest first, capped at 500.
+Turn it off and the file is deleted. It feeds the command palette's results
+and nothing else.
 
-## Documentation
-
-The full docs live at **[velofy.co/troy](https://velofy.co/troy/)**:
-
-- [Installation](https://velofy.co/troy/installation/) and [Quickstart](https://velofy.co/troy/quickstart/)
-- [Driving Troy from an agent](https://velofy.co/troy/driving-troy/)
-- [How Troy reads a page](https://velofy.co/troy/reading-pages/)
-- [Privacy and permissions](https://velofy.co/troy/privacy-and-permissions/)
-- [Claude Code plugin and skills](https://velofy.co/troy/claude-plugin/)
-- [Command line and environment](https://velofy.co/troy/command-line/) and [Configuration and files](https://velofy.co/troy/configuration/)
-- [Troubleshooting](https://velofy.co/troy/troubleshooting/) and [Changelog](https://velofy.co/troy/changelog/)
-
-Design documents in this repository:
+## Documents
 
 - [**PRD**](docs/PRD.md). The problem, who it is for, requirements with their
   real status, success measures, milestones, risks.
@@ -228,14 +239,6 @@ is visible and where it sits.
 running whatever was last built, which is exactly how a months-old binary ends up
 in Spotlight; `npm run dist:*` clears it first.
 
-## Contributing
-
-Issues and pull requests are welcome at
-[github.com/velofy/troy](https://github.com/velofy/troy). A change is accepted
-when a test drives the real application and shows it working, and CI must stay
-green on all three platforms. See
-[Development and releases](https://velofy.co/troy/development/).
-
 ## Name
 
 Troy, for the walls and the long patient siege, not for the horse. That reading
@@ -245,4 +248,4 @@ crop marks: the thing that sees the page.
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT

@@ -133,8 +133,8 @@ Status: **Shipped** · **In build** · **Planned**
 | P4 | Tracking parameters stripped before the request is made | Shipped |
 | P5 | Camera, microphone, geolocation and notifications denied | Shipped |
 | P6 | Popups become tabs; no uncontrolled windows | Shipped |
-| P7 | History recorded when the user turns it on | **Not built.** The setting stores and toggles, but nothing reads it. See §9. |
-| P8 | A way to clear recorded history | Planned, blocked on P7 |
+| P7 | History recorded when the user turns it on | Shipped |
+| P8 | A way to clear recorded history | Shipped. Turning the setting off deletes `history.json` |
 
 ### 6.5 Distribution
 
@@ -181,12 +181,6 @@ lands, and they are the acceptance criteria for it:
 | M6 | `--deep`, docs, plugin, npm publish | | |
 
 ## 9. Known gaps
-
-**The history setting does nothing.** `rememberHistory` is stored, toggled and
-displayed, but no module reads it and no history is written. A switch that does
-not do what it says is worse than no switch. Either build the store or hide the
-control until it exists. This is the highest-priority correctness gap in the
-shipped product.
 
 **Not notarised.** Downloaded by hand, macOS requires Control-click then Open.
 Accepted deliberately: Homebrew removes the cost for anyone who installs that

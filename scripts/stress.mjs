@@ -153,6 +153,35 @@ try {
     await chrome.evaluate((tabId) => window.troy.selectTab(tabId), id)
     await chrome.fill('#omni', `stress round ${round}`)
     if (round % 5 === 0) await chrome.evaluate(() => window.troy.reload())
+
+    // Exercise the two new high-frequency chrome paths rather than measuring
+    // them only while idle: palette ranking across all tabs, and batched model
+    // text arriving at the agent panel.
+    if (round % 8 === 0) {
+      await app.evaluate(({ Menu }) => Menu.getApplicationMenu()?.getMenuItemById('command-palette')?.click())
+      await new Promise((resolve) => setTimeout(resolve, 30))
+      await app.evaluate(({ webContents }) => {
+        const palette = webContents.getAllWebContents().find((wc) => wc.getURL().includes('palette.html'))
+        return palette?.executeJavaScript(`window.troyPalette.query('stress tab').then(() => window.troyPalette.close())`, true)
+      })
+    }
+    if (round % 10 === 0) {
+      await app.evaluate(({ BrowserWindow }) => {
+        const main = BrowserWindow.getAllWindows()[0]
+        const tabId = globalThis.__troy.snapshot().activeTabId
+        main?.webContents.send('agent:event', { type: 'run-started', runId: 'stress', tabId, sequence: 1 })
+        for (let index = 0; index < 12; index++) {
+          main?.webContents.send('agent:event', {
+            type: 'assistant-delta',
+            runId: 'stress',
+            tabId,
+            sequence: index + 2,
+            delta: 'streamed words ',
+          })
+        }
+        main?.webContents.send('agent:event', { type: 'completed', runId: 'stress', tabId, sequence: 14 })
+      })
+    }
     round += 1
     await new Promise((resolve) => setTimeout(resolve, 60))
   }

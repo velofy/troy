@@ -5,3 +5,7 @@ release/
 .DS_Store
 /.superpowers/
 .glep/
+.voice-build/
+.vision-build/
+build/voice/
+build/ocr/

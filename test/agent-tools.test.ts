@@ -110,9 +110,12 @@ describe('the tool specs', () => {
     const gated = Object.fromEntries(specs.map((s) => [s.name, s.gated]))
     expect(gated).toEqual({
       page_read: false,
+      page_find: false,
+      page_recall: false,
       page_text: false,
       page_scrape: false,
       page_navigate: true,
+      page_act: true,
       page_click: true,
       page_fill: true,
       page_select: true,
@@ -473,6 +476,63 @@ describe('page_text', () => {
     const { host } = makeHost({ evalResults: [{ badSelector: true }] })
     const result = await createTools(host).run('page_text', { selector: '>>>' })
     expect(String(result.error)).toMatch(/not a usable selector/i)
+  })
+})
+
+describe('page_act batches', () => {
+  it('runs fill then click in order and reports both verified', async () => {
+    const { host } = makeHost({
+      evalResults: [
+        { count: 1, items: [plainInput] }, { acted: true }, 'Pune',
+        { count: 1, items: [plainButton] }, snapshotA, { acted: true }, snapshotB,
+      ],
+    })
+    const result = await createTools(host).run('page_act', {
+      ops: [
+        { op: 'fill', selector: '#city', text: 'Pune' },
+        { op: 'click', selector: '#reveals' },
+      ],
+    })
+    expect(result.ok).toBe(true)
+    const batch = result as unknown as { results: Array<{ ok: boolean }> }
+    expect(batch.results).toHaveLength(2)
+    expect(batch.results[0].ok).toBe(true)
+    expect(batch.results[1].ok).toBe(true)
+  })
+
+  it('stops at the first refusal and runs nothing after it', async () => {
+    const { host, evaluates } = makeHost({ evalResults: [{ count: 0, items: [] }] })
+    const result = await createTools(host).run('page_act', {
+      ops: [
+        { op: 'click', selector: '#missing' },
+        { op: 'fill', selector: '#city', text: 'Pune' },
+      ],
+    })
+    expect(result.ok).toBe(false)
+    const stopped = result as unknown as { stoppedAt: number; results: unknown[] }
+    expect(stopped.stoppedAt).toBe(0)
+    expect(stopped.results).toHaveLength(1)
+    expect(evaluates()).toBe(1)
+  })
+
+  it('accepts the steps alias the CLI sends', async () => {
+    const { host } = makeHost({
+      evalResults: [{ count: 1, items: [plainInput] }, { acted: true }, 'Pune'],
+    })
+    const result = await createTools(host).run('page_act', {
+      steps: [{ op: 'fill', selector: '#city', text: 'Pune' }],
+    })
+    expect(result.ok).toBe(true)
+  })
+
+  it('refuses empty and unknown ops without touching the page', async () => {
+    const { host, calls } = makeHost()
+    const tools = createTools(host)
+    expect(String((await tools.run('page_act', { ops: [] })).error)).toMatch(/empty list/)
+    const unknown = await tools.run('page_act', { ops: [{ op: 'teleport' }] })
+    expect(unknown.ok).toBe(false)
+    expect(String(unknown.error)).toMatch(/unknown op/)
+    expect(calls).toHaveLength(0)
   })
 })
 
