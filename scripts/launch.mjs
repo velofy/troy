@@ -9,6 +9,7 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import { parseArgs, BROWSERS, BROWSER_BIN, BROWSER_PROFILE, CDP_URL, die, out } from './lib.mjs';
+import { profileKillPattern } from './launch-pattern.mjs';
 
 const args = parseArgs(process.argv.slice(2));
 const bin = args.browser ? (BROWSERS[args.browser] || String(args.browser)) : BROWSER_BIN;
@@ -62,10 +63,13 @@ if (already) {
   process.stderr.write('==> stale browser on CDP, restarting it\n');
   try {
     const { execFileSync } = await import('node:child_process');
-    // Anchored to the end of the argument, so a profile whose path merely
-    // starts with this one (…/helium vs …/helium-2) is not killed as well.
-    // execFileSync also keeps the profile path out of a shell string.
-    execFileSync('pkill', ['-f', `user-data-dir=${BROWSER_PROFILE}($| )`], { stdio: 'ignore' });
+    // Anchored to the end of the argument and ERE-escaped, so a profile whose
+    // path merely starts with this one (…/helium vs …/helium-2) or differs on
+    // a metacharacter (e.g. `.apply-fill` vs `Xapply-fill`) is not killed,
+    // and metacharacters like `+`, `(`, `)`, `[`, `]` in a profile path still
+    // match literally. execFileSync also keeps the profile path out of a shell
+    // string.
+    execFileSync('pkill', ['-f', profileKillPattern(BROWSER_PROFILE)], { stdio: 'ignore' });
   } catch { /* nothing matched, fine */ }
   await new Promise((r) => setTimeout(r, 2500));
 }

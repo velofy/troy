@@ -1,6 +1,10 @@
 import { chromium } from 'playwright'
 import type { BrowserContext, CDPSession, Page } from 'playwright'
 import type { Box, Cdp } from './types.js'
+import { clampClip } from './clip.js'
+
+export { clampClip } from './clip.js'
+export type { Viewport } from './clip.js'
 
 type RawSend = (method: string, params?: Record<string, unknown>) => Promise<unknown>
 type RawOn = (event: string, handler: (params: unknown) => void) => void
@@ -113,9 +117,16 @@ async function buildCdp(page: Page, session: CDPSession, onClose: () => Promise<
     },
 
     async screenshot(clip?: Box): Promise<Buffer> {
+      let cdpClip: { x: number; y: number; width: number; height: number; scale: number } | undefined
+      if (clip) {
+        const metrics = await session.send('Page.getLayoutMetrics')
+        const vp = metrics.cssLayoutViewport ?? metrics.cssVisualViewport ?? metrics.layoutViewport
+        const clamped = clampClip(clip, { width: vp.clientWidth, height: vp.clientHeight })
+        cdpClip = { x: clamped.x, y: clamped.y, width: clamped.w, height: clamped.h, scale: 1 }
+      }
       const { data } = await session.send('Page.captureScreenshot', {
         format: 'png',
-        ...(clip ? { clip: { x: clip.x, y: clip.y, width: clip.w, height: clip.h, scale: 1 } } : {}),
+        ...(cdpClip ? { clip: cdpClip } : {}),
       })
       return Buffer.from(data, 'base64')
     },

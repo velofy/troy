@@ -5,9 +5,12 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { createServer } from 'node:net'
 import type { AddressInfo } from 'node:net'
+import { spawn } from 'node:child_process'
+import { createRequire } from 'node:module'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { serveFixtures } from './server.js'
+import { endpointFile, readEndpoint } from '../src/browser/endpoint.js'
 
 /**
  * The bridge: driving Troy from another process.
@@ -113,6 +116,49 @@ describe('the agent bridge', () => {
       if (!landed) await new Promise((resolve) => setTimeout(resolve, 100))
     }
     expect(landed).toBe(true)
+  })
+
+  it('advertises the verified endpoint and preserves it when a second instance launches on the same profile', async () => {
+    const file = endpointFile(userDataDir)
+    const first = readEndpoint(file)
+    expect(first).not.toBeNull()
+    expect(first?.port).toBe(cdpPort)
+
+    // Spawn a second Troy against the same userDataDir and a different port.
+    // Single-instance locking must make it exit without overwriting or
+    // clearing the running instance's agent-endpoint.json.
+    const require = createRequire(import.meta.url)
+    const electronBin = require('electron') as unknown as string
+    const otherPort = await freePort()
+    const second = spawn(
+      electronBin,
+      [
+        ...(process.platform === 'linux' ? ['--no-sandbox'] : []),
+        path.join(root, 'src', 'browser', 'main.js'),
+        `--user-data-dir=${userDataDir}`,
+        `--cdp-port=${otherPort}`,
+      ],
+      { env: { ...process.env, TROY_TEST: '1' }, stdio: 'ignore' },
+    )
+
+    const exitCode = await new Promise<number | null>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        second.kill()
+        reject(new Error('second instance did not exit promptly'))
+      }, 15_000)
+      second.once('error', (err) => {
+        clearTimeout(timer)
+        reject(err)
+      })
+      second.once('exit', (code) => {
+        clearTimeout(timer)
+        resolve(code)
+      })
+    })
+
+    expect(exitCode).toBe(0)
+    const after = readEndpoint(file)
+    expect(after).toEqual(first)
   })
 })
 

@@ -18,7 +18,7 @@ import { installSafetyNet } from './resilience.js'
 import { installBlocker } from './tracking.js'
 import { settingsFile, readSettings, writeSettings } from './settings.js'
 import { loadExtensions, summarise } from './extensions.js'
-import { describeEndpoint, endpointFile, writeEndpoint, clearEndpoint } from './endpoint.js'
+import { describeEndpoint, endpointFile, writeEndpoint, clearEndpoint, probeEndpoint } from './endpoint.js'
 import { readTab, summariseDocument } from './readPort.js'
 import { historyFile, readHistory, recordVisit, clearHistory } from './history.js'
 import { bookmarksFile, readBookmarks, toggleBookmark, isBookmarked } from './bookmarks.js'
@@ -111,12 +111,17 @@ function documentUrl(url) {
 // before app ready because getPath('userData') is derived from the name.
 app.setName('Troy')
 
+// One instance per profile. A second launch on the same profile focuses the
+// running window and exits without touching agent-endpoint.json (neither
+// overwriting it on start nor clearing it on will-quit).
+const hasSingleInstanceLock = app.requestSingleInstanceLock()
+
 /**
  * Attaching a debugger from outside is how another process drives this
  * browser. It is off unless asked for, because an open CDP port is full
  * control of every logged-in tab.
  */
-const cdpPort = readCdpPort()
+const cdpPort = hasSingleInstanceLock ? readCdpPort() : null
 if (cdpPort) {
   app.commandLine.appendSwitch('remote-debugging-port', String(cdpPort))
   app.commandLine.appendSwitch('remote-allow-origins', 'http://127.0.0.1')
@@ -136,12 +141,14 @@ if (cdpPort) {
  * agent control — or on its own with --agent for callers that want the tool
  * contract and not a bare DevTools port.
  */
-const agentSocketWanted = Boolean(
-  cdpPort ||
-    process.argv.includes('--agent') ||
-    process.argv.includes('--agent-socket') ||
-    process.env.TROY_AGENT_SOCKET === '1',
-)
+const agentSocketWanted =
+  hasSingleInstanceLock &&
+  Boolean(
+    cdpPort ||
+      process.argv.includes('--agent') ||
+      process.argv.includes('--agent-socket') ||
+      process.env.TROY_AGENT_SOCKET === '1',
+  )
 
 const launchMode = readLaunchMode()
 if (launchMode === 'hidden') {
@@ -1236,9 +1243,14 @@ function createWindow() {
   })
 }
 
-/** A URL passed on the command line opens instead of the new tab page. */
-function firstUrlFromArgv() {
-  const arg = process.argv.slice(1).find((a) => /^https?:\/\//i.test(a))
+/**
+ * A URL passed on the command line opens instead of the new tab page.
+ *
+ * @param {string[]} [argv]
+ * @returns {string | undefined}
+ */
+function firstUrlFromArgv(argv = process.argv) {
+  const arg = argv.slice(1).find((a) => /^https?:\/\//i.test(a))
   return arg ?? undefined
 }
 
@@ -1721,155 +1733,175 @@ function maybeRecordHistory(tab, urlOverride) {
   historyCache = recordVisit(historyFile(app.getPath('userData')), { url, title: wc.getTitle() || hostOf(url) })
 }
 
-app.whenReady().then(async () => {
-  // The About panel is the one page every user eventually reads, so it says
-  // plainly what Troy is and where its author's other work lives.
-  app.setAboutPanelOptions({
-    applicationName: 'Troy',
-    applicationVersion: app.getVersion(),
-    credits: [
-      'A browser an agent can actually read and drive.',
-      '',
-      'Troy is a real Chromium browser with its own chrome, built so an AI agent can attach to the window you are already signed into and work the page with you. Most automation starts a fresh, empty browser; Troy inverts that: you browse in it, and the agent joins your session.',
-      '',
-      'Made by Anish Kr Singh.',
-      'More of my work: https://anishfyi.com and https://velofy.co',
-      'Project home: https://anishfyi.com/troy',
-    ].join('\n'),
-  })
-
-  // Before anything else. An uncaught error in a handler used to end the
-  // browser, tabs and all, and report itself only as "Troy quit unexpectedly".
-  installSafetyNet({
-    logFile: path.join(app.getPath('userData'), 'troy-errors.log'),
-    onError: (scope, err) => {
-      console.error(`[troy] ${scope}:`, err)
-      notify('Something went wrong inside Troy. It stayed open; the details are in troy-errors.log.')
-    },
-  })
-
-  // An agent browser should not hand out privileged device access because a
-  // page asked. Check and request paths use the same policy so Chromium cannot
-  // observe one answer during probing and receive another at prompt time.
-  /**
-   * @param {import('electron').WebContents | null} wc
-   * @param {string} permission
-   * @param {any} [details]
-   * @param {boolean} [strictMedia]
-   */
-  const permissionAllowed = (wc, permission, details = {}, strictMedia = false) => {
-    if (permission === 'fullscreen' || permission === 'clipboard-sanitized-write') return true
-    if (permission !== 'media') return false
-    if (!wc || !win || wc !== win.webContents || documentUrl(wc.getURL()) !== CHROME_URL) return false
-    if (Date.now() >= microphoneCaptureUntil) return false
-    const mediaTypes = [
-      ...(Array.isArray(details.mediaTypes) ? details.mediaTypes : []),
-      details.mediaType,
-    ].filter(Boolean).map(String)
-    if (mediaTypes.some((type) => /video/i.test(type))) return false
-    return strictMedia ? mediaTypes.some((type) => /audio/i.test(type)) : true
-  }
-  session.defaultSession.setPermissionCheckHandler((wc, permission, _origin, details) =>
-    permissionAllowed(wc, permission, details),
-  )
-  session.defaultSession.setPermissionRequestHandler((wc, permission, callback, details) => {
-    callback(permissionAllowed(wc, permission, details, true))
-  })
-  session.defaultSession.on('will-download', (event, item, webContents) => {
-    const tab = [...tabs.values()].find((candidate) => alive(candidate) && candidate.view.webContents === webContents)
-    if (!tab || agentController?.activeTabId !== tab.id) return
-    event.preventDefault()
-    item.cancel()
-    agentController.block(tab.id, 'downloads are never autonomous')
-  })
-
-  // Cancel third-party analytics and ad beacons. The setting is read per
-  // request rather than at startup, so the toggle takes effect at once.
-  installBlocker(session.defaultSession, { enabled: () => settings().blockTrackers })
-
-  fs.mkdirSync(extensionsDir(), { recursive: true })
-  const loaded = await loadExtensions(session.defaultSession, extensionsDir())
-  if (loaded.length) console.log(`[troy] ${summarise(loaded)}`)
-
-  if (process.platform === 'darwin' && app.dock) {
-    const icon = appIcon()
-    if (icon) app.dock.setIcon(icon)
-  }
-
-  buildMenu()
-  createWindow()
-
-  // The agent socket rides the same ask as the CDP port: either flag opens
-  // it, and it needs the window to exist before it can open tabs in it.
-  if (agentSocketWanted) {
-    try {
-      agentSocket = await createAgentSocket({
-        listTabs: () =>
-          [...tabs.values()].filter(alive).map((tab) => ({
-            id: tab.id,
-            url: tab.view.webContents.getURL(),
-            title: tabTitle(tab),
-            active: tab.id === activeTabId,
-            loading: tab.view.webContents.isLoading(),
-          })),
-        resolveTab: (id) => {
-          const tab = id === undefined ? tabs.get(activeTabId) : tabs.get(id)
-          return alive(tab) ? { id: tab.id, webContents: tab.view.webContents } : null
-        },
-        // A socket-opened tab stays in the background: the agent works in it,
-        // but what the person is looking at does not get swapped out from
-        // under them. /activate exists for when focus is the point.
-        openTab: (url) => {
-          if (!win || win.isDestroyed()) return null
-          const id = createTab(url ?? NEW_TAB_URL)
-          const tab = tabs.get(id)
-          if (alive(tab)) tab.view.setVisible(false)
-          return id
-        },
-        selectTab,
-        closeTab,
-        resolve: resolveNavigation,
-        ocr: selectedOcr(),
-        memory: memoryFacade,
-      })
-    } catch (err) {
-      console.error('[troy] the agent socket could not open:', err)
+if (!hasSingleInstanceLock) {
+  app.quit()
+} else {
+  app.on('second-instance', (_event, argv) => {
+    if (win && !win.isDestroyed()) {
+      if (win.isMinimized()) win.restore()
+      win.show()
+      win.focus()
+      const url = firstUrlFromArgv(argv)
+      if (url) selectTab(createTab(url))
+    } else if (app.isReady()) {
+      createWindow()
     }
-    app.on('will-quit', () => {
-      agentSocket?.close().catch(() => {})
-      agentMemoryStore?.close()
+  })
+
+  app.whenReady().then(async () => {
+    // The About panel is the one page every user eventually reads, so it says
+    // plainly what Troy is and where its author's other work lives.
+    app.setAboutPanelOptions({
+      applicationName: 'Troy',
+      applicationVersion: app.getVersion(),
+      credits: [
+        'A browser an agent can actually read and drive.',
+        '',
+        'Troy is a real Chromium browser with its own chrome, built so an AI agent can attach to the window you are already signed into and work the page with you. Most automation starts a fresh, empty browser; Troy inverts that: you browse in it, and the agent joins your session.',
+        '',
+        'Made by Anish Kr Singh.',
+        'More of my work: https://anishfyi.com and https://velofy.co',
+        'Project home: https://anishfyi.com/troy',
+      ].join('\n'),
     })
-  }
 
-  // Say where the agent bridge is, so nothing has to be copied by hand.
-  if (cdpPort || agentSocket) {
-    const file = endpointFile(app.getPath('userData'))
-    writeEndpoint(
-      file,
-      describeEndpoint({
-        port: cdpPort ?? 0,
-        pid: process.pid,
-        version: app.getVersion(),
-        agentPort: agentSocket?.port,
-        agentToken: agentSocket?.token,
-      }),
+    // Before anything else. An uncaught error in a handler used to end the
+    // browser, tabs and all, and report itself only as "Troy quit unexpectedly".
+    installSafetyNet({
+      logFile: path.join(app.getPath('userData'), 'troy-errors.log'),
+      onError: (scope, err) => {
+        console.error(`[troy] ${scope}:`, err)
+        notify('Something went wrong inside Troy. It stayed open; the details are in troy-errors.log.')
+      },
+    })
+
+    // An agent browser should not hand out privileged device access because a
+    // page asked. Check and request paths use the same policy so Chromium cannot
+    // observe one answer during probing and receive another at prompt time.
+    /**
+     * @param {import('electron').WebContents | null} wc
+     * @param {string} permission
+     * @param {any} [details]
+     * @param {boolean} [strictMedia]
+     */
+    const permissionAllowed = (wc, permission, details = {}, strictMedia = false) => {
+      if (permission === 'fullscreen' || permission === 'clipboard-sanitized-write') return true
+      if (permission !== 'media') return false
+      if (!wc || !win || wc !== win.webContents || documentUrl(wc.getURL()) !== CHROME_URL) return false
+      if (Date.now() >= microphoneCaptureUntil) return false
+      const mediaTypes = [
+        ...(Array.isArray(details.mediaTypes) ? details.mediaTypes : []),
+        details.mediaType,
+      ].filter(Boolean).map(String)
+      if (mediaTypes.some((type) => /video/i.test(type))) return false
+      return strictMedia ? mediaTypes.some((type) => /audio/i.test(type)) : true
+    }
+    session.defaultSession.setPermissionCheckHandler((wc, permission, _origin, details) =>
+      permissionAllowed(wc, permission, details),
     )
-    app.on('will-quit', () => clearEndpoint(file))
-  }
-})
+    session.defaultSession.setPermissionRequestHandler((wc, permission, callback, details) => {
+      callback(permissionAllowed(wc, permission, details, true))
+    })
+    session.defaultSession.on('will-download', (event, item, webContents) => {
+      const tab = [...tabs.values()].find((candidate) => alive(candidate) && candidate.view.webContents === webContents)
+      if (!tab || agentController?.activeTabId !== tab.id) return
+      event.preventDefault()
+      item.cancel()
+      agentController.block(tab.id, 'downloads are never autonomous')
+    })
 
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit()
-})
-app.on('activate', () => {
-  if (BrowserWindow.getAllWindows().length === 0) {
+    // Cancel third-party analytics and ad beacons. The setting is read per
+    // request rather than at startup, so the toggle takes effect at once.
+    installBlocker(session.defaultSession, { enabled: () => settings().blockTrackers })
+
+    fs.mkdirSync(extensionsDir(), { recursive: true })
+    const loaded = await loadExtensions(session.defaultSession, extensionsDir())
+    if (loaded.length) console.log(`[troy] ${summarise(loaded)}`)
+
+    if (process.platform === 'darwin' && app.dock) {
+      const icon = appIcon()
+      if (icon) app.dock.setIcon(icon)
+    }
+
+    buildMenu()
     createWindow()
-  } else if (win && !win.isDestroyed() && !win.isVisible()) {
-    // A hidden launch stays hidden until the person actually asks for it,
-    // which on macOS means clicking the dock icon or reopening the app.
-    win.show()
-  }
-})
+
+    // The agent socket rides the same ask as the CDP port: either flag opens
+    // it, and it needs the window to exist before it can open tabs in it.
+    if (agentSocketWanted) {
+      try {
+        agentSocket = await createAgentSocket({
+          listTabs: () =>
+            [...tabs.values()].filter(alive).map((tab) => ({
+              id: tab.id,
+              url: tab.view.webContents.getURL(),
+              title: tabTitle(tab),
+              active: tab.id === activeTabId,
+              loading: tab.view.webContents.isLoading(),
+            })),
+          resolveTab: (id) => {
+            const tab = id === undefined ? tabs.get(activeTabId) : tabs.get(id)
+            return alive(tab) ? { id: tab.id, webContents: tab.view.webContents } : null
+          },
+          // A socket-opened tab stays in the background: the agent works in it,
+          // but what the person is looking at does not get swapped out from
+          // under them. /activate exists for when focus is the point.
+          openTab: (url) => {
+            if (!win || win.isDestroyed()) return null
+            const id = createTab(url ?? NEW_TAB_URL)
+            const tab = tabs.get(id)
+            if (alive(tab)) tab.view.setVisible(false)
+            return id
+          },
+          selectTab,
+          closeTab,
+          resolve: resolveNavigation,
+          ocr: selectedOcr(),
+          memory: memoryFacade,
+        })
+      } catch (err) {
+        console.error('[troy] the agent socket could not open:', err)
+      }
+      app.on('will-quit', () => {
+        agentSocket?.close().catch(() => {})
+        agentMemoryStore?.close()
+      })
+    }
+
+    // Say where the agent bridge is, so nothing has to be copied by hand.
+    // Probe the debugging port first so we never advertise a CDP port that
+    // Chromium failed to bind; the agent socket can still be advertised on
+    // its own (port: 0) when it is listening.
+    const verifiedCdpPort = cdpPort && (await probeEndpoint(cdpPort)) ? cdpPort : 0
+    if (verifiedCdpPort || agentSocket) {
+      const file = endpointFile(app.getPath('userData'))
+      writeEndpoint(
+        file,
+        describeEndpoint({
+          port: verifiedCdpPort,
+          pid: process.pid,
+          version: app.getVersion(),
+          agentPort: agentSocket?.port,
+          agentToken: agentSocket?.token,
+        }),
+      )
+      app.on('will-quit', () => clearEndpoint(file))
+    }
+  })
+
+  app.on('window-all-closed', () => {
+    if (process.platform !== 'darwin') app.quit()
+  })
+  app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length === 0) {
+      createWindow()
+    } else if (win && !win.isDestroyed() && !win.isVisible()) {
+      // A hidden launch stays hidden until the person actually asks for it,
+      // which on macOS means clicking the dock icon or reopening the app.
+      win.show()
+    }
+  })
+}
 
 // A test hook, present only when a test asked for it. The battle tests need
 // to see which tab is active and where each view actually sits, and neither

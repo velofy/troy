@@ -10,6 +10,7 @@ import {
   readEndpoint,
   clearEndpoint,
   pidAlive,
+  probeEndpoint,
 } from '../src/browser/endpoint.js'
 
 const cleanups: Array<() => void> = []
@@ -163,5 +164,77 @@ describe('pidAlive', () => {
     expect(pidAlive(0, mustNotRun)).toBe(false)
     expect(pidAlive(-1, mustNotRun)).toBe(false)
     expect(pidAlive(2.5, mustNotRun)).toBe(false)
+  })
+})
+
+describe('probeEndpoint', () => {
+  it('returns true when /json/version answers 200 ok', async () => {
+    let seenUrl = ''
+    let seenSignal: AbortSignal | undefined
+    const okFetch = async (url: string, init?: { signal?: AbortSignal }) => {
+      seenUrl = url
+      seenSignal = init?.signal
+      return new Response(JSON.stringify({ Browser: 'Chrome/130' }), { status: 200 })
+    }
+
+    await expect(probeEndpoint(9333, okFetch)).resolves.toBe(true)
+    expect(seenUrl).toBe('http://127.0.0.1:9333/json/version')
+    expect(seenSignal).toBeInstanceOf(AbortSignal)
+    expect(seenSignal?.aborted).toBe(false)
+  })
+
+  it('returns false on non-200 responses', async () => {
+    const notFound = async () => new Response('not found', { status: 404 })
+    const serverErr = async () => new Response('boom', { status: 500 })
+
+    await expect(probeEndpoint(9333, notFound)).resolves.toBe(false)
+    await expect(probeEndpoint(9333, serverErr)).resolves.toBe(false)
+  })
+
+  it('returns false on network errors', async () => {
+    const refused = async (): Promise<{ ok: boolean }> => {
+      throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNREFUSED' } })
+    }
+    const syncThrow = (): Promise<{ ok: boolean }> => {
+      throw new Error('socket closed')
+    }
+
+    await expect(probeEndpoint(9333, refused)).resolves.toBe(false)
+    await expect(probeEndpoint(9333, syncThrow)).resolves.toBe(false)
+  })
+
+  it('aborts and returns false when the probe times out', async () => {
+    let aborted = false
+    const stalled = (_url: string, init?: { signal?: AbortSignal }) =>
+      new Promise<{ ok: boolean }>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => {
+          aborted = true
+          reject(new Error('aborted'))
+        })
+      })
+
+    const start = Date.now()
+    await expect(probeEndpoint(9333, stalled, 30)).resolves.toBe(false)
+    expect(aborted).toBe(true)
+    expect(Date.now() - start).toBeLessThan(1000)
+  })
+
+  it('returns false on timeout even if fetchImpl ignores AbortSignal', async () => {
+    const uncooperative = () => new Promise<{ ok: boolean }>(() => undefined)
+
+    const start = Date.now()
+    await expect(probeEndpoint(9333, uncooperative, 30)).resolves.toBe(false)
+    expect(Date.now() - start).toBeLessThan(1000)
+  })
+
+  it('refuses invalid ports without calling fetch', async () => {
+    const mustNotRun = async (): Promise<{ ok: boolean }> => {
+      throw new Error('fetch must not be called')
+    }
+    await expect(probeEndpoint(0, mustNotRun)).resolves.toBe(false)
+    await expect(probeEndpoint(-1, mustNotRun)).resolves.toBe(false)
+    await expect(probeEndpoint(65536, mustNotRun)).resolves.toBe(false)
+    await expect(probeEndpoint(9222.5, mustNotRun)).resolves.toBe(false)
+    await expect(probeEndpoint(Number.NaN, mustNotRun)).resolves.toBe(false)
   })
 })

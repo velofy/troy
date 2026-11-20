@@ -112,6 +112,52 @@ export function pidAlive(pid, signal = process.kill) {
 }
 
 /**
+ * @typedef {(url: string, init?: { signal?: AbortSignal }) => Promise<{ ok: boolean, body?: { cancel?: () => Promise<unknown> } | null }>} ProbeFetch
+ */
+
+/**
+ * Confirm Chromium actually bound the debugging port before advertising it.
+ *
+ * Probes `http://127.0.0.1:${port}/json/version` with a timeout so an
+ * unresponsive or unbound port is never written to `agent-endpoint.json`.
+ *
+ * @param {number} port
+ * @param {ProbeFetch} [fetchImpl]
+ * @param {number} [timeoutMs]
+ * @returns {Promise<boolean>}
+ */
+export async function probeEndpoint(port, fetchImpl = fetch, timeoutMs = 1500) {
+  if (!Number.isInteger(port) || port <= 0 || port >= 65536) return false
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return false
+  const controller = new AbortController()
+  /** @type {ReturnType<typeof setTimeout> | undefined} */
+  let timer
+  try {
+    const response = await Promise.race([
+      Promise.resolve().then(() =>
+        fetchImpl(`http://127.0.0.1:${port}/json/version`, { signal: controller.signal }),
+      ),
+      /** @type {Promise<never>} */ (
+        new Promise((_resolve, reject) => {
+          timer = setTimeout(() => {
+            controller.abort()
+            reject(new Error('probeEndpoint timed out'))
+          }, timeoutMs)
+        })
+      ),
+    ])
+    if (response?.body?.cancel) {
+      await response.body.cancel().catch(() => {})
+    }
+    return Boolean(response?.ok)
+  } catch {
+    return false
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+  }
+}
+
+/**
  * Read it back, or null when Troy is not accepting agent connections.
  *
  * A file left behind by a crashed Troy is not an advertisement: it points at
