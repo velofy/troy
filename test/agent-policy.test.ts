@@ -86,4 +86,65 @@ describe('irreversible and sensitive action policy', () => {
     })
     expect(decision).toMatchObject({ allowed: false, status: 'boundary', origin: 'https://other.example' })
   })
+
+  it('permits submit/commit clicks when allowSubmit is true while still blocking sensitive, download, and cross-origin', () => {
+    for (const item of [
+      { tag: 'button', text: 'Place order' },
+      { tag: 'button', text: 'Send message' },
+      { tag: 'button', text: 'Delete account' },
+      { tag: 'button', text: 'Remove permanently' },
+      { tag: 'button', text: 'Continue', defaultSubmit: true },
+    ]) {
+      expect(authorizeAction({ name: 'page_click', item, allowSubmit: true, allowedOrigins: allowed })).toEqual({ allowed: true })
+    }
+
+    // Still hard-blocked even with allowSubmit: true
+    expect(authorizeAction({
+      name: 'page_click',
+      item: { tag: 'input', type: 'password', label: 'Password' },
+      allowSubmit: true,
+      allowedOrigins: allowed,
+    })).toMatchObject({ allowed: false, code: 'sensitive' })
+
+    expect(authorizeAction({
+      name: 'page_click',
+      item: { tag: 'a', text: 'Report', download: true },
+      allowSubmit: true,
+      allowedOrigins: allowed,
+    })).toMatchObject({ allowed: false, code: 'download' })
+
+    expect(authorizeAction({
+      name: 'page_click',
+      item: { tag: 'a', text: 'Checkout', href: 'https://other.example/pay' },
+      allowSubmit: true,
+      allowedOrigins: allowed,
+    })).toMatchObject({ allowed: false, status: 'boundary', code: 'origin' })
+
+    expect(authorizeAction({
+      name: 'page_navigate',
+      targetUrl: 'javascript:alert(1)',
+      allowSubmit: true,
+      allowedOrigins: allowed,
+    })).toMatchObject({ allowed: false, code: 'scheme' })
+  })
+
+  it('origin-gates page_eval to allowed HTTP(S) origins only', () => {
+    expect(authorizeAction({
+      name: 'page_eval',
+      currentUrl: 'https://example.com/app',
+      allowedOrigins: allowed,
+    })).toEqual({ allowed: true })
+
+    expect(authorizeAction({
+      name: 'page_eval',
+      currentUrl: 'https://evil.example/app',
+      allowedOrigins: allowed,
+    })).toMatchObject({ allowed: false, status: 'boundary', code: 'origin' })
+
+    expect(authorizeAction({
+      name: 'page_eval',
+      currentUrl: 'file:///etc/passwd',
+      allowedOrigins: allowed,
+    })).toMatchObject({ allowed: false, status: 'blocked', code: 'scheme' })
+  })
 })

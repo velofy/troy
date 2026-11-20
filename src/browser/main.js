@@ -1850,7 +1850,16 @@ if (!hasSingleInstanceLock) {
             if (!win || win.isDestroyed()) return null
             const id = createTab(url ?? NEW_TAB_URL)
             const tab = tabs.get(id)
-            if (alive(tab)) tab.view.setVisible(false)
+            if (alive(tab)) {
+              const { width, height } = win.getContentBounds()
+              tab.view.setBounds({
+                x: 0,
+                y: CHROME_HEIGHT,
+                width: Math.max(800, width),
+                height: Math.max(600, height - CHROME_HEIGHT),
+              })
+              tab.view.setVisible(false)
+            }
             return id
           },
           selectTab,

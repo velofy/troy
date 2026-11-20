@@ -154,3 +154,128 @@ describe('page_navigate on a real page', () => {
     expect(await cdp.evaluate<string>('document.title')).toBe('stay')
   })
 })
+
+describe('ARIA, open Shadow DOM, SPA inputs, and real-DOM browser-user tools', () => {
+  it('discovers ARIA roles and open Shadow DOM elements and acts across shadow boundaries', async () => {
+    await open(`<!doctype html><title>shadow</title>
+      <div id="aria-tab" role="tab" aria-selected="false" tabindex="0" onclick="this.setAttribute('aria-selected','true')">Settings</div>
+      <details id="acc"><summary>Details</summary><p>Hidden body</p></details>
+      <div id="host"></div>
+      <script>
+        const root = document.getElementById('host').attachShadow({ mode: 'open' });
+        root.innerHTML = '<input id="s-in" placeholder="Shadow query"><button id="s-btn" type="button">Shadow Go</button><p id="s-out">idle</p>';
+        root.getElementById('s-btn').addEventListener('click', () => {
+          root.getElementById('s-out').textContent = 'done:' + root.getElementById('s-in').value;
+        });
+      </script>`)
+
+    const read = await tools.run('page_read', {})
+    const interactive = read.interactive as Array<{ selector: string; role?: string; text?: string; placeholder?: string }>
+    expect(interactive.some((i) => i.role === 'tab' && i.text === 'Settings')).toBe(true)
+    expect(interactive.some((i) => i.text === 'Details')).toBe(true)
+
+    const shadowInput = interactive.find((i) => i.placeholder === 'Shadow query')
+    const shadowBtn = interactive.find((i) => i.text === 'Shadow Go')
+    expect(shadowInput?.selector).toContain('>>>')
+    expect(shadowBtn?.selector).toContain('>>>')
+
+    // Fill and click inside open Shadow DOM
+    const fillRes = await tools.run('page_fill', { selector: shadowInput!.selector, text: 'hello' })
+    expect(fillRes.ok).toBe(true)
+    const clickRes = await tools.run('page_click', { selector: shadowBtn!.selector })
+    expect(clickRes.ok).toBe(true)
+    const textRes = await tools.run('page_text', { selector: '#host >>> #s-out' })
+    expect(textRes.ok).toBe(true)
+    expect(textRes.text).toBe('done:hello')
+
+    // ARIA tab selection and <details> open verify via diffSnapshots
+    const tabClick = await tools.run('page_click', { selector: '#aria-tab' })
+    expect(tabClick.ok).toBe(true)
+    expect(tabClick.changed).toBe(true)
+
+    const summaryClick = await tools.run('page_click', { selector: '#acc > summary' })
+    expect(summaryClick.ok).toBe(true)
+    expect(summaryClick.changed).toBe(true)
+  })
+
+  it('verifies checkbox toggles and same-length text swaps in diffSnapshots', async () => {
+    await open(`<!doctype html><title>toggles</title>
+      <input id="chk" type="checkbox">
+      <button id="swap" type="button" onclick="document.getElementById('lbl').textContent='BBB'">Swap</button>
+      <span id="lbl">AAA</span>`)
+
+    const chkClick = await tools.run('page_click', { selector: '#chk' })
+    expect(chkClick.ok).toBe(true)
+    expect(chkClick.changed).toBe(true)
+
+    const swapClick = await tools.run('page_click', { selector: '#swap' })
+    expect(swapClick.ok).toBe(true)
+    expect(swapClick.changed).toBe(true)
+  })
+
+  it('fills React-style controlled inputs via native value setter and clears with clear: true', async () => {
+    await open(`<!doctype html><title>controlled</title>
+      <input id="ctrl" value="initial">
+      <p id="seen"></p>
+      <script>
+        const el = document.getElementById('ctrl');
+        let internal = 'initial';
+        Object.defineProperty(el, 'value', {
+          get() { return internal; },
+          set(v) { /* ignore direct el.value = ... like React tracker */ },
+          configurable: true,
+        });
+        el.addEventListener('input', (e) => {
+          internal = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').get.call(el);
+          document.getElementById('seen').textContent = 'input:' + internal;
+        });
+      </script>`)
+
+    const filled = await tools.run('page_fill', { selector: '#ctrl', text: 'ReactValue' })
+    expect(filled.ok).toBe(true)
+    expect(await cdp.evaluate<string>(`document.getElementById('seen').textContent`)).toBe('input:ReactValue')
+
+    const cleared = await tools.run('page_fill', { selector: '#ctrl', clear: true })
+    expect(cleared.ok).toBe(true)
+    expect(await cdp.evaluate<string>(`document.getElementById('seen').textContent`)).toBe('input:')
+  })
+
+  it('runs page_text (full page), page_scroll, page_hover, page_press, page_wait, and page_eval on a real DOM', async () => {
+    await open(`<!doctype html><title>primitives</title>
+      <style>body { height: 2500px; }</style>
+      <button id="hov" type="button" onmouseover="document.getElementById('hstate').textContent='hovered'">Hover me</button>
+      <span id="hstate">cold</span>
+      <input id="kinput" value="">
+      <span id="klog"></span>
+      <div id="delayed" style="display:none">Arrived!</div>
+      <script>
+        document.getElementById('kinput').addEventListener('keydown', (e) => {
+          document.getElementById('klog').textContent = e.key + ':' + e.ctrlKey;
+        });
+        setTimeout(() => { document.getElementById('delayed').style.display = 'block'; }, 120);
+      </script>`)
+
+    const fullText = await tools.run('page_text', {})
+    expect(fullText.ok).toBe(true)
+    expect(String(fullText.text)).toContain('Hover me')
+
+    const hovered = await tools.run('page_hover', { selector: '#hov' })
+    expect(hovered.ok).toBe(true)
+    expect(await cdp.evaluate<string>(`document.getElementById('hstate').textContent`)).toBe('hovered')
+
+    const pressed = await tools.run('page_press', { selector: '#kinput', key: 'Control+Enter' })
+    expect(pressed.ok).toBe(true)
+    expect(await cdp.evaluate<string>(`document.getElementById('klog').textContent`)).toBe('Enter:true')
+
+    const scrolled = await tools.run('page_scroll', { direction: 'down', amount: 500 })
+    expect(scrolled.ok).toBe(true)
+    expect(Number(scrolled.scrollY)).toBeGreaterThanOrEqual(400)
+
+    const waited = await tools.run('page_wait', { selector: '#delayed', state: 'visible', timeoutMs: 2000 })
+    expect(waited.ok).toBe(true)
+    expect(waited.matched).toBe(true)
+
+    const evalRes = await tools.run('page_eval', { expression: '2 + 40' })
+    expect(evalRes).toEqual({ ok: true, value: 42 })
+  })
+})

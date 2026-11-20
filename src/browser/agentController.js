@@ -169,6 +169,12 @@ export function createAgentController(deps) {
         },
         context: () => port.context(),
         invalidate: () => port.invalidate(),
+        ...(port.pressKey ? { pressKey: (/** @type {string} */ combo) => port.pressKey(combo) } : {}),
+        ...(port.hoverPoint ? { hoverPoint: (/** @type {number} */ x, /** @type {number} */ y) => port.hoverPoint(x, y) } : {}),
+        ...(port.history ? { history: (/** @type {'back' | 'forward' | 'reload'} */ direction) => port.history(direction) } : {}),
+        ...(port.screenshot ? { screenshot: (/** @type {any} */ opts) => port.screenshot(opts) } : {}),
+        ...(port.getConsoleLogs ? { getConsoleLogs: (/** @type {any} */ opts) => port.getConsoleLogs(opts) } : {}),
+        ...(port.getNetworkLogs ? { getNetworkLogs: (/** @type {any} */ opts) => port.getNetworkLogs(opts) } : {}),
       },
       {
         elements,

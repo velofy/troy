@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { _electron as electron, type ElectronApplication } from 'playwright'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { readFileSync, existsSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
@@ -18,13 +19,19 @@ import { fileURLToPath } from 'node:url'
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..')
 
 const PAGE = `<!doctype html><title>socket fixture</title>
+<style>body { min-height: 2000px; }</style>
 <h1>Catalogue</h1>
 <input id="q" type="search" name="q" placeholder="Search products" aria-label="Search the catalogue">
 <button id="go" type="button">Search</button>
 <a href="/cart" id="cart">Your cart</a>
+<div id="hover-status">cold</div>
 <script>
+console.warn('fixture-boot-warning')
 document.getElementById('go').addEventListener('click', () => {
   document.title = 'Searched: ' + document.getElementById('q').value
+})
+document.getElementById('go').addEventListener('mouseover', () => {
+  document.getElementById('hover-status').textContent = 'hovered'
 })
 </script>`
 
@@ -38,7 +45,30 @@ let endpoint: { agentPort: number; agentToken: string; port: number }
 
 interface SocketTab { id: number; url: string; active?: boolean }
 interface InteractiveItem { ref?: string; placeholder?: string; ariaLabel?: string; text?: string }
-interface ToolReply { ok?: boolean; id?: number; url?: string; text?: string; error?: unknown; enabled?: boolean; tabs?: SocketTab[]; interactive?: InteractiveItem[]; items?: InteractiveItem[]; elements?: Array<{ selector?: string }>; pages?: unknown[] }
+interface ToolReply {
+  ok?: boolean
+  id?: number
+  url?: string
+  text?: string
+  error?: unknown
+  enabled?: boolean
+  tabs?: SocketTab[]
+  interactive?: InteractiveItem[]
+  items?: InteractiveItem[]
+  elements?: Array<{ selector?: string }>
+  pages?: unknown[]
+  mimeType?: string
+  data?: string
+  annotatedCount?: number
+  value?: unknown
+  scrollY?: number
+  count?: number
+  entries?: Array<{ text?: string; level?: string; url?: string; status?: number }>
+  delta?: boolean
+  added?: InteractiveItem[]
+  changed?: InteractiveItem[]
+  matched?: boolean
+}
 
 async function post(route: string, body: unknown = {}, token?: string): Promise<ToolReply> {
   const res = await fetch(`http://127.0.0.1:${endpoint.agentPort}${route}`, {
@@ -166,6 +196,81 @@ describe('the agent socket', () => {
     expect(found.elements!.length).toBeGreaterThan(0)
     expect(found.elements![0].selector).toBe('#q')
     expect(found.pages!.length).toBeGreaterThan(0)
+  })
+
+  it('supports upgraded browser-user tools end-to-end and disables page_scrape', async () => {
+    const tabs = await tabList((t) => t.some((x) => x.url.startsWith(base)), 'the fixture tab')
+    const mine = tabs.find((t: { url: string }) => t.url.startsWith(base))!
+
+    // Dead page_scrape stub is not advertised on the bridge
+    const scrape = await post('/tool', { tabId: mine.id, name: 'page_scrape', args: { url: 'https://example.com' } })
+    expect(scrape.ok).toBe(false)
+    expect(String(scrape.error)).toMatch(/unknown tool/i)
+
+    // Full-page page_text without ref
+    const fullText = await post('/tool', { tabId: mine.id, name: 'page_text', args: {} })
+    expect(fullText.ok).toBe(true)
+    expect(fullText.text).toContain('Catalogue')
+
+    // page_eval, page_scroll, page_press, page_wait
+    const evalRes = await post('/tool', { tabId: mine.id, name: 'page_eval', args: { expression: 'document.title' } })
+    expect(evalRes.ok).toBe(true)
+    expect(evalRes.value).toBe('socket fixture')
+
+    const scrollRes = await post('/tool', { tabId: mine.id, name: 'page_scroll', args: { direction: 'down', amount: 300 } })
+    expect(scrollRes.ok).toBe(true)
+    expect(scrollRes.scrollY).toBeGreaterThanOrEqual(200)
+
+    const pressRes = await post('/tool', { tabId: mine.id, name: 'page_press', args: { key: 'Home' } })
+    expect(pressRes.ok).toBe(true)
+
+    const waitRes = await post('/tool', { tabId: mine.id, name: 'page_wait', args: { text: 'Catalogue', timeoutMs: 2000 } })
+    expect(waitRes.ok).toBe(true)
+    expect(waitRes.matched).toBe(true)
+
+    // page_hover via ref
+    const readRes = await post('/tool', { tabId: mine.id, name: 'page_read', args: {} })
+    const btn = readRes.interactive?.find((i) => i.text === 'Search')
+    expect(btn?.ref).toMatch(/^e\d+$/)
+    const hoverRes = await post('/tool', { tabId: mine.id, name: 'page_hover', args: { ref: btn!.ref } })
+    expect(hoverRes.ok).toBe(true)
+
+    // Set-of-Marks page_screenshot: valid PNG arrives intact and overlay is cleaned up
+    const shot = await post('/tool', { tabId: mine.id, name: 'page_screenshot', args: { annotate: true } })
+    expect(shot.ok).toBe(true)
+    expect(shot.mimeType).toBe('image/png')
+    expect(shot.data?.startsWith('iVBORw0KGgo')).toBe(true)
+    expect((shot.annotatedCount ?? 0)).toBeGreaterThan(0)
+    const overlayGone = await post('/tool', { tabId: mine.id, name: 'page_eval', args: { expression: 'document.getElementById("__troy_som_overlay") === null' } })
+    expect(overlayGone.value).toBe(true)
+
+    // page_console and page_network capture telemetry
+    const consoleRes = await post('/tool', { tabId: mine.id, name: 'page_console', args: {} })
+    expect(consoleRes.ok).toBe(true)
+    expect(Array.isArray(consoleRes.entries)).toBe(true)
+    const networkRes = await post('/tool', { tabId: mine.id, name: 'page_network', args: {} })
+    expect(networkRes.ok).toBe(true)
+    expect(Array.isArray(networkRes.entries)).toBe(true)
+
+    // page_history reload
+    const reloadRes = await post('/tool', { tabId: mine.id, name: 'page_history', args: { direction: 'reload' } })
+    expect(reloadRes.ok).toBe(true)
+    expect(reloadRes.url).toContain(base)
+  })
+
+  it('troy CLI detects dead PID in agent-endpoint.json cleanly', async () => {
+    const staleFile = path.join(dir, 'stale-endpoint.json')
+    await writeFile(staleFile, JSON.stringify({ port: 0, pid: 99999999, agentPort: 19999, agentToken: 'dead' }))
+    let stderr = ''
+    try {
+      execFileSync(process.execPath, [path.join(root, 'bin', 'troy.mjs'), 'status', '--endpoint', staleFile], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      })
+    } catch (err) {
+      stderr = String((err as { stderr?: string }).stderr ?? '')
+    }
+    expect(stderr).toMatch(/stale agent-endpoint\.json|no longer running/i)
   })
 
   it('refuses to close a tab it did not open, and closes one it did', async () => {

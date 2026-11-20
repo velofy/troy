@@ -111,8 +111,14 @@ export async function createAgentSocket(deps) {
         },
         context: () => port.context(),
         invalidate: () => port.invalidate(),
+        pressKey: (combo) => port.pressKey(combo),
+        hoverPoint: (x, y) => port.hoverPoint(x, y),
+        history: (direction) => port.history(direction),
+        screenshot: (opts) => port.screenshot(opts),
+        getConsoleLogs: (opts) => port.getConsoleLogs(opts),
+        getNetworkLogs: (opts) => port.getNetworkLogs(opts),
       },
-      { elements, authorize, memory: memory ?? undefined },
+      { elements, authorize, includeScrape: false, memory: memory ?? undefined },
     )
     session = { port, elements, tools }
     sessions.set(tabId, session)

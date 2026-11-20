@@ -10,7 +10,11 @@
 // does not go hunting), but its value never leaves the page. Ordinary fields
 // report their current value because "what did I already type" is useful.
 
-import { ELEMENT_DESCRIPTOR_EXPRESSION, SELECTOR_FOR_EXPRESSION } from './element-descriptor.js'
+import {
+  COLLECT_INTERACTIVE_EXPRESSION,
+  ELEMENT_DESCRIPTOR_EXPRESSION,
+  SELECTOR_FOR_EXPRESSION,
+} from './element-descriptor.js'
 
 /** Hard cap on the text preview, in characters. The full fused read lives
  * elsewhere; this is the model's working snapshot, not an archive. */
@@ -28,13 +32,11 @@ export const READ_PAGE_EXPRESSION = `(() => {
   const selectorFor = ${SELECTOR_FOR_EXPRESSION}
 
   const describe = ${ELEMENT_DESCRIPTOR_EXPRESSION}
+  const collectInteractive = ${COLLECT_INTERACTIVE_EXPRESSION}
 
   const interactive = []
-  const seen = new Set()
   let interactiveTruncated = false
-  for (const el of body.querySelectorAll('a[href], button, input, textarea, select, [contenteditable=""], [contenteditable="true"]')) {
-    if (seen.has(el)) continue
-    seen.add(el)
+  for (const el of collectInteractive(body)) {
     const rect = el.getBoundingClientRect()
     if (rect.width <= 0 && rect.height <= 0) continue
     if (interactive.length >= 500) {

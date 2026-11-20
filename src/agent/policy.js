@@ -92,6 +92,7 @@ export function sensitiveElementReason(item) {
  *   item?: Record<string, any>,
  *   targetUrl?: string,
  *   currentUrl?: string,
+ *   allowSubmit?: boolean,
  *   allowedOrigins: Iterable<string>,
  * }} request
  * @returns {PolicyDecision}
@@ -109,6 +110,23 @@ export function authorizeAction(request) {
         status: 'boundary',
         code: 'origin',
         reason: `navigation requested an origin outside this session: ${origin}`,
+        origin,
+      }
+    }
+    return { allowed: true }
+  }
+
+  if (request.name === 'page_eval') {
+    const origin = exactOrigin(request.currentUrl)
+    if (!origin) {
+      return { allowed: false, status: 'blocked', code: 'scheme', reason: 'page_eval may run only on HTTP or HTTPS pages' }
+    }
+    if (!allowed.has(origin)) {
+      return {
+        allowed: false,
+        status: 'boundary',
+        code: 'origin',
+        reason: `page_eval requested on an origin outside this session: ${origin}`,
         origin,
       }
     }
@@ -136,13 +154,15 @@ export function authorizeAction(request) {
   if (item.download || String(item.type ?? '').toLowerCase() === 'file') {
     return { allowed: false, status: 'blocked', code: 'download', reason: 'downloads and file operations are never autonomous' }
   }
-  if (item.defaultSubmit || String(item.type ?? '').toLowerCase() === 'submit') {
+
+  const allowSubmit = request.allowSubmit === true
+  if (!allowSubmit && (item.defaultSubmit || String(item.type ?? '').toLowerCase() === 'submit')) {
     return { allowed: false, status: 'blocked', code: 'submit', reason: 'native form submission is never autonomous' }
   }
 
   // These labels describe the effect of activating a control. They must not
   // block reversible typing into ordinary fields such as Email or Postcode.
-  if (request.name === 'page_click') {
+  if (request.name === 'page_click' && !allowSubmit) {
     const words = descriptor(item)
     if (COMMERCE_PATTERN.test(words)) {
       return { allowed: false, status: 'blocked', code: 'commerce', reason: 'purchases, payments, transfers, trades, and subscriptions are never autonomous' }

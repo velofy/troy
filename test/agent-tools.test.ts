@@ -23,14 +23,22 @@ type ExecResult =
 type HostOptions = {
   evalResults?: unknown[]
   exec?: (cmd: string, args: string[]) => Promise<ExecResult>
+  pressKey?: (combo: string) => Promise<void>
+  hoverPoint?: (x: number, y: number) => Promise<void>
+  history?: (direction: 'back' | 'forward' | 'reload') => Promise<{ ok: boolean; url?: string; title?: string; error?: string }>
+  screenshot?: (opts?: { fullPage?: boolean; clip?: { x: number; y: number; width: number; height: number } }) => Promise<{ mimeType: string; data: string; width?: number; height?: number }>
+  getConsoleLogs?: (opts?: { clear?: boolean; level?: string; limit?: number }) => { count: number; entries: unknown[] }
+  getNetworkLogs?: (opts?: { clear?: boolean; failedOnly?: boolean; limit?: number }) => { count: number; entries: unknown[] }
+  url?: string
 }
 
 function makeHost(options: HostOptions = {}) {
   const evalQueue = [...(options.evalResults ?? [])]
   const calls: Array<{ kind: string; detail: unknown }> = []
+  let epoch = 0
   const host = {
     read: async () => ({
-      url: 'https://a.example/',
+      url: options.url ?? 'https://a.example/',
       title: 'fixture',
       readyState: 'complete',
       characterCount: 5,
@@ -57,8 +65,18 @@ function makeHost(options: HostOptions = {}) {
       return { missing: 'no exec scripted' }
     },
     settle: async () => {},
+    context: () => ({ tabId: 1, url: options.url ?? 'https://a.example/', epoch }),
+    invalidate: () => {
+      epoch += 1
+    },
+    ...(options.pressKey ? { pressKey: options.pressKey } : {}),
+    ...(options.hoverPoint ? { hoverPoint: options.hoverPoint } : {}),
+    ...(options.history ? { history: options.history } : {}),
+    ...(options.screenshot ? { screenshot: options.screenshot } : {}),
+    ...(options.getConsoleLogs ? { getConsoleLogs: options.getConsoleLogs } : {}),
+    ...(options.getNetworkLogs ? { getNetworkLogs: options.getNetworkLogs } : {}),
   }
-  return { host, calls, evaluates: () => calls.filter((c) => c.kind === 'evaluate').length }
+  return { host, calls, evaluates: () => calls.filter((c) => c.kind === 'evaluate').length, epoch: () => epoch }
 }
 
 /** A clickable element the guards have no reason to refuse. */
@@ -114,11 +132,20 @@ describe('the tool specs', () => {
       page_recall: false,
       page_text: false,
       page_scrape: false,
+      page_wait: false,
+      page_screenshot: false,
+      page_console: false,
+      page_network: false,
       page_navigate: true,
       page_act: true,
       page_click: true,
       page_fill: true,
       page_select: true,
+      page_press: true,
+      page_scroll: true,
+      page_hover: true,
+      page_history: true,
+      page_eval: true,
     })
   })
 
@@ -541,5 +568,197 @@ describe('unknown tools', () => {
     const { host } = makeHost()
     const result = await createTools(host).run('page_teleport', {})
     expect(String(result.error)).toMatch(/unknown tool/i)
+  })
+})
+
+describe('upgraded browser-user tools', () => {
+  it('page_text with no target reads full visible page text', async () => {
+    const { host } = makeHost({
+      evalResults: [{ url: 'https://a.example/doc', title: 'Doc', text: 'Full page visible words' }],
+    })
+    const result = await createTools(host).run('page_text', {})
+    expect(result).toEqual({
+      ok: true,
+      text: 'Full page visible words',
+      url: 'https://a.example/doc',
+      title: 'Doc',
+      truncated: false,
+    })
+  })
+
+  it('page_fill allows explicit clear: true and text: "" while still rejecting whitespace-only', async () => {
+    const { host: h1 } = makeHost({
+      evalResults: [{ count: 1, items: [plainInput] }, { acted: true }, ''],
+    })
+    expect((await createTools(h1).run('page_fill', { selector: '#city', clear: true })).ok).toBe(true)
+
+    const { host: h2 } = makeHost({
+      evalResults: [{ count: 1, items: [plainInput] }, { acted: true }, ''],
+    })
+    expect((await createTools(h2).run('page_fill', { selector: '#city', text: '' })).ok).toBe(true)
+
+    const { host: h3 } = makeHost()
+    expect((await createTools(h3).run('page_fill', { selector: '#city' })).error).toMatch(/empty/i)
+  })
+
+  it('page_click allows submit buttons when allowSubmit: true is passed', async () => {
+    const { host } = makeHost({
+      evalResults: [
+        { count: 1, items: [{ ...plainButton, text: 'Submit application', defaultSubmit: true }] },
+        snapshotA,
+        { acted: true },
+        snapshotB,
+      ],
+    })
+    const result = await createTools(host).run('page_click', { selector: '#submit', allowSubmit: true })
+    expect(result.ok).toBe(true)
+    expect(result.changed).toBe(true)
+  })
+
+  it('page_press dispatches via host.pressKey when wired and falls back to JS events otherwise', async () => {
+    const pressed: string[] = []
+    const { host } = makeHost({
+      pressKey: async (combo) => { pressed.push(combo) },
+    })
+    const res = await createTools(host).run('page_press', { key: 'Control+A' })
+    expect(res).toEqual({ ok: true, key: 'Control+A' })
+    expect(pressed).toEqual(['Control+A'])
+
+    const { host: fallbackHost } = makeHost({ evalResults: [{ dispatched: true, key: 'Enter' }] })
+    const fb = await createTools(fallbackHost).run('page_press', { key: 'Enter' })
+    expect(fb).toEqual({ ok: true, key: 'Enter' })
+  })
+
+  it('page_scroll validates direction and returns scroll metrics', async () => {
+    const { host } = makeHost({
+      evalResults: [{ scrollX: 0, scrollY: 480, maxScrollX: 0, maxScrollY: 2000, viewportHeight: 600, atTop: false, atBottom: false }],
+    })
+    const res = await createTools(host).run('page_scroll', { direction: 'down', amount: 480 })
+    expect(res).toEqual({ ok: true, scrollX: 0, scrollY: 480, maxScrollX: 0, maxScrollY: 2000, viewportHeight: 600, atTop: false, atBottom: false })
+
+    const bad = await createTools(makeHost().host).run('page_scroll', { direction: 'diagonal' })
+    expect(String(bad.error)).toMatch(/invalid scroll direction/i)
+  })
+
+  it('page_hover calls host.hoverPoint with the bounding rect center', async () => {
+    const moved: Array<[number, number]> = []
+    const { host } = makeHost({
+      evalResults: [
+        { count: 1, items: [plainButton] },
+        { found: true, visible: true, x: 120.4, y: 240.6 },
+      ],
+      hoverPoint: async (x, y) => { moved.push([x, y]) },
+    })
+    const res = await createTools(host).run('page_hover', { selector: '#menu' })
+    expect(res).toEqual({ ok: true, x: 120, y: 241 })
+    expect(moved).toEqual([[120.4, 240.6]])
+  })
+
+  it('page_wait polls until condition matches and respects AbortSignal', async () => {
+    const { host } = makeHost({
+      evalResults: [
+        { matched: false, url: 'https://a.example/' },
+        { matched: true, url: 'https://a.example/done' },
+      ],
+    })
+    const res = await createTools(host).run('page_wait', { text: 'Loaded', timeoutMs: 2000 })
+    expect(res.ok).toBe(true)
+    expect(res.matched).toBe(true)
+    expect(res.url).toBe('https://a.example/done')
+
+    const controller = new AbortController()
+    controller.abort(new Error('stopped'))
+    const cancelled = await createTools(makeHost().host, { signal: controller.signal }).run('page_wait', { ms: 5000 })
+    expect(cancelled.cancelled).toBe(true)
+  })
+
+  it('page_screenshot bypasses the 20KB truncation cap so large PNGs arrive intact', async () => {
+    const bigPng = 'A'.repeat(MAX_TOOL_RESULT_CHARS * 2)
+    const { host } = makeHost({
+      evalResults: [{ url: 'https://a.example/', title: 'Big' }],
+      screenshot: async () => ({ mimeType: 'image/png', data: bigPng, width: 1280, height: 720 }),
+    })
+    const res = await createTools(host).run('page_screenshot', {})
+    expect(res.ok).toBe(true)
+    expect(res.mimeType).toBe('image/png')
+    expect(res.data).toBe(bigPng)
+    expect(res.truncated).toBeUndefined()
+  })
+
+  it('page_history navigates back/forward/reload and invalidates epoch', async () => {
+    const directions: string[] = []
+    const { host, epoch } = makeHost({
+      history: async (dir) => {
+        directions.push(dir)
+        return { ok: true, url: 'https://a.example/prev', title: 'Prev' }
+      },
+    })
+    const res = await createTools(host).run('page_history', { direction: 'back' })
+    expect(res).toEqual({ ok: true, direction: 'back', url: 'https://a.example/prev', title: 'Prev' })
+    expect(directions).toEqual(['back'])
+    expect(epoch()).toBe(1)
+  })
+
+  it('page_console and page_network forward filters to host ring buffers', async () => {
+    const { host } = makeHost({
+      getConsoleLogs: (opts) => ({
+        count: 1,
+        entries: [{ level: opts?.level ?? 'all', text: 'boom' }],
+      }),
+      getNetworkLogs: (opts) => ({
+        count: 1,
+        entries: [{ url: 'https://a.example/api', status: 500, failed: Boolean(opts?.failedOnly) }],
+      }),
+    })
+    const tools = createTools(host)
+    expect(await tools.run('page_console', { level: 'error', clear: true })).toEqual({
+      ok: true,
+      count: 1,
+      entries: [{ level: 'error', text: 'boom' }],
+    })
+    expect(await tools.run('page_network', { failedOnly: true, limit: 10 })).toEqual({
+      ok: true,
+      count: 1,
+      entries: [{ url: 'https://a.example/api', status: 500, failed: true }],
+    })
+  })
+
+  it('page_eval returns JSON-serializable values', async () => {
+    const { host } = makeHost({
+      evalResults: [JSON.stringify({ value: { answer: 42 } })],
+    })
+    const res = await createTools(host).run('page_eval', { expression: '({ answer: 42 })' })
+    expect(res).toEqual({ ok: true, value: { answer: 42 } })
+  })
+
+  it('page_act supports press, hover, scroll, wait, and forwards allowSubmit', async () => {
+    const pressed: string[] = []
+    const hovered: Array<[number, number]> = []
+    const { host } = makeHost({
+      evalResults: [
+        { count: 1, items: [plainButton] },
+        { found: true, visible: true, x: 10, y: 20 },
+        { scrollX: 0, scrollY: 300, maxScrollX: 0, maxScrollY: 1000, viewportHeight: 600, atTop: false, atBottom: false },
+        { count: 1, items: [{ ...plainButton, text: 'Submit', defaultSubmit: true }] },
+        snapshotA,
+        { acted: true },
+        snapshotB,
+      ],
+      pressKey: async (combo) => { pressed.push(combo) },
+      hoverPoint: async (x, y) => { hovered.push([x, y]) },
+    })
+    const res = await createTools(host).run('page_act', {
+      allowSubmit: true,
+      ops: [
+        { op: 'hover', selector: '#h' },
+        { op: 'scroll', direction: 'down', amount: 300 },
+        { op: 'press', key: 'Tab' },
+        { op: 'wait', ms: 1 },
+        { op: 'click', selector: '#sub' },
+      ],
+    })
+    expect(res.ok).toBe(true)
+    expect(pressed).toEqual(['Tab'])
+    expect(hovered).toEqual([[10, 20]])
   })
 })

@@ -65,4 +65,48 @@ export class ElementRegistry {
     }
     return { selector: entry.selector, item: { ...entry.item } }
   }
+
+  /**
+   * Update a still-valid entry's selector and descriptor in place after
+   * deterministic stale-ref recovery or harmless text drift on the same control.
+   *
+   * @param {string} ref
+   * @param {string} selector
+   * @param {Record<string, any>} item
+   * @param {{ tabId: number, url: string, epoch: number }} context
+   */
+  update(ref, selector, item, context) {
+    const entry = this.entries.get(ref)
+    if (!entry) return false
+    if (entry.tabId !== context.tabId || entry.url !== context.url || entry.epoch !== context.epoch) {
+      return false
+    }
+    const publicItem = /** @type {Record<string, any>} */ ({ ...item, ref })
+    delete publicItem.selector
+    this.entries.set(ref, {
+      selector: String(selector ?? ''),
+      item: publicItem,
+      tabId: context.tabId,
+      url: context.url,
+      epoch: context.epoch,
+    })
+    return true
+  }
+
+  /**
+   * Return every entry valid for the current tab/url/epoch context.
+   *
+   * @param {{ tabId: number, url: string, epoch: number }} context
+   * @returns {Array<{ ref: string, selector: string, item: Record<string, any> }>}
+   */
+  list(context) {
+    /** @type {Array<{ ref: string, selector: string, item: Record<string, any> }>} */
+    const out = []
+    for (const [ref, entry] of this.entries) {
+      if (entry.tabId === context.tabId && entry.url === context.url && entry.epoch === context.epoch) {
+        out.push({ ref, selector: entry.selector, item: { ...entry.item } })
+      }
+    }
+    return out
+  }
 }
