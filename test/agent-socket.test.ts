@@ -37,6 +37,46 @@ document.getElementById('go').addEventListener('mouseover', () => {
 
 const CART = `<!doctype html><title>cart</title><h1>Your cart</h1>`
 
+const V3_FRAME = `<!doctype html><title>inner frame</title>
+<style>body { margin: 0; padding: 12px; }</style>
+<input id="fin" placeholder="Frame query">
+<button id="fbtn" type="button" onclick="document.getElementById('fout').textContent='frame:' + document.getElementById('fin').value">Frame Submit</button>
+<p id="fout">frame-idle</p>`
+
+const V3_PAGE = `<!doctype html><title>v3 fixture</title>
+<style>
+  body { margin: 0; padding: 16px; }
+  #f1 { width: 320px; height: 120px; border: 3px solid #222; display: block; margin-bottom: 12px; }
+  #ctx-btn, #dbl-btn, #drag-src, #drag-dst { display: inline-block; width: 90px; height: 36px; margin-right: 12px; border: 1px solid #333; }
+</style>
+<iframe id="f1" src="/frame"></iframe>
+<button id="ctx-btn" type="button">RightTarget</button>
+<button id="dbl-btn" type="button">DoubleTarget</button>
+<div id="drag-src" role="button" tabindex="0">DragSrc</div>
+<div id="drag-dst" role="button" tabindex="0">DragDst</div>
+<input id="file-up" type="file">
+<div id="v3-log">ready</div>
+<div id="upload-log">none</div>
+<script>
+const log = document.getElementById('v3-log');
+document.getElementById('ctx-btn').addEventListener('contextmenu', (e) => { e.preventDefault(); log.textContent = 'ctx-ok'; });
+document.getElementById('dbl-btn').addEventListener('dblclick', () => { log.textContent = 'dbl-ok'; });
+let dragging = false;
+document.getElementById('drag-src').addEventListener('mousedown', () => { dragging = true; });
+window.addEventListener('mouseup', (e) => {
+  if (!dragging) return;
+  dragging = false;
+  const r = document.getElementById('drag-dst').getBoundingClientRect();
+  if (e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom) {
+    log.textContent = 'drag-ok';
+  }
+});
+document.getElementById('file-up').addEventListener('change', (e) => {
+  const names = Array.from(e.target.files || []).map((f) => f.name).join(',');
+  document.getElementById('upload-log').textContent = 'uploaded:' + names;
+});
+</script>`
+
 let app: ElectronApplication
 let dir: string
 let server: Server
@@ -68,6 +108,13 @@ interface ToolReply {
   added?: InteractiveItem[]
   changed?: InteractiveItem[]
   matched?: boolean
+  blocked?: boolean
+  code?: string
+  files?: string[]
+  resumedBy?: string
+  waiting?: boolean
+  armed?: { accept?: boolean; promptText?: string } | null
+  history?: Array<{ type?: string; message?: string; handled?: string; promptText?: string }>
 }
 
 async function post(route: string, body: unknown = {}, token?: string): Promise<ToolReply> {
@@ -103,7 +150,10 @@ beforeAll(async () => {
 
   server = createServer((req, res) => {
     res.writeHead(200, { 'content-type': 'text/html' })
-    res.end(req.url === '/cart' ? CART : PAGE)
+    if (req.url === '/cart') res.end(CART)
+    else if (req.url === '/v3') res.end(V3_PAGE)
+    else if (req.url === '/frame') res.end(V3_FRAME)
+    else res.end(PAGE)
   })
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()))
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
@@ -112,6 +162,14 @@ beforeAll(async () => {
     args: [path.join(root, 'src', 'browser', 'main.js'), `--user-data-dir=${dir}`, '--agent'],
     env: { ...process.env, TROY_TEST: '1' },
   })
+  // Prevent Playwright's test harness from auto-dismissing JS dialogs on tabs
+  // so Troy's own CDP Page.javascriptDialogOpening handler owns them cleanly.
+  app.context().on('page', (page) => {
+    page.on('dialog', () => {})
+  })
+  for (const page of app.windows()) {
+    page.on('dialog', () => {})
+  }
 
   const file = path.join(dir, 'agent-endpoint.json')
   const deadline = Date.now() + 15_000
@@ -258,6 +316,118 @@ describe('the agent socket', () => {
     expect(reloadRes.url).toContain(base)
   })
 
+  it('supports v3.0 superpowers end-to-end in real Electron: iframe piercing, trusted clickPoint/drag, safe page_upload, page_dialog, and page_handoff', async () => {
+    const opened = await post('/open', { url: `${base}/v3` })
+    expect(opened.ok).toBe(true)
+    const tabId = opened.id!
+
+    // Wait for both page and same-origin iframe to finish rendering
+    const deadline = Date.now() + 15_000
+    let read: ToolReply = {}
+    while (Date.now() < deadline) {
+      read = await post('/tool', { tabId, name: 'page_read' })
+      if (read.ok && read.interactive?.some((i) => i.placeholder === 'Frame query')) break
+      await new Promise((r) => setTimeout(r, 100))
+    }
+    expect(read.ok).toBe(true)
+    const frameInput = read.interactive?.find((i) => i.placeholder === 'Frame query')
+    const frameBtn = read.interactive?.find((i) => i.text === 'Frame Submit')
+    expect(frameInput?.ref).toMatch(/^e\d+$/)
+    expect(frameBtn?.ref).toMatch(/^e\d+$/)
+
+    // Fill & click inside same-origin iframe on a background tab
+    const fFill = await post('/tool', { tabId, name: 'page_fill', args: { ref: frameInput!.ref, text: 'troy-v3' } })
+    expect(fFill.ok).toBe(true)
+    const fClick = await post('/tool', { tabId, name: 'page_click', args: { ref: frameBtn!.ref, allowSubmit: true } })
+    expect(fClick.ok).toBe(true)
+    const fOut = await post('/tool', { tabId, name: 'page_eval', args: { expression: `document.getElementById('f1').contentDocument.getElementById('fout').textContent` } })
+    expect(fOut.value).toBe('frame:troy-v3')
+
+    // Safe page_upload on a background tab: blocks .ssh/id_rsa and uploads a real temp file via CDP DOM.setFileInputFiles
+    const fileInput = read.interactive?.find((i) => i.ref && (i as Record<string, unknown>).type === 'file')
+    expect(fileInput?.ref).toMatch(/^e\d+$/)
+    const blockedUpload = await post('/tool', { tabId, name: 'page_upload', args: { ref: fileInput!.ref, files: ['/home/user/.ssh/id_rsa'] } })
+    expect(blockedUpload.ok).toBe(false)
+    expect(blockedUpload.blocked).toBe(true)
+
+    const sampleFile = path.join(dir, 'sample-upload.txt')
+    await writeFile(sampleFile, 'troy v3 upload test')
+    const uploaded = await post('/tool', { tabId, name: 'page_upload', args: { ref: fileInput!.ref, files: [sampleFile] } })
+    expect(uploaded.ok).toBe(true)
+    expect(uploaded.files).toEqual(['sample-upload.txt'])
+    expect((await post('/tool', { tabId, name: 'page_eval', args: { expression: `document.getElementById('upload-log').textContent` } })).value).toBe('uploaded:sample-upload.txt')
+
+    // page_handoff: non-blocking mode + wait mode resumed via window.__troyHandoffResumed
+    // (also exercises focusTab showing the window & activating the tab)
+    const handoffNonBlocking = await post('/tool', { tabId, name: 'page_handoff', args: { reason: 'Check status', wait: false } })
+    expect(handoffNonBlocking.ok).toBe(true)
+    expect(handoffNonBlocking.waiting).toBe(false)
+
+    const handoffPromise = post('/tool', { tabId, name: 'page_handoff', args: { reason: 'Resume me', timeoutMs: 5000 } })
+    await new Promise((r) => setTimeout(r, 250))
+    await post('/tool', { tabId, name: 'page_eval', args: { expression: `window.__troyHandoffResumed = true` } })
+    const handoffDone = await handoffPromise
+    expect(handoffDone.ok).toBe(true)
+    expect(handoffDone.resumedBy).toBe('user')
+    const bannerCleaned = await post('/tool', { tabId, name: 'page_eval', args: { expression: `document.getElementById('troy-handoff-banner') === null` } })
+    expect(bannerCleaned.value).toBe(true)
+
+    // Trusted CDP right-click, double-click, and drag
+    const ctxBtn = read.interactive?.find((i) => i.text === 'RightTarget')
+    const dblBtn = read.interactive?.find((i) => i.text === 'DoubleTarget')
+    const dragSrc = read.interactive?.find((i) => i.text === 'DragSrc')
+    const dragDst = read.interactive?.find((i) => i.text === 'DragDst')
+    expect(ctxBtn?.ref && dblBtn?.ref && dragSrc?.ref && dragDst?.ref).toBeTruthy()
+
+    const rightClick = await post('/tool', { tabId, name: 'page_click', args: { ref: ctxBtn!.ref, button: 'right' } })
+    expect(rightClick.ok).toBe(true)
+    expect((await post('/tool', { tabId, name: 'page_eval', args: { expression: `document.getElementById('v3-log').textContent` } })).value).toBe('ctx-ok')
+
+    const dblClick = await post('/tool', { tabId, name: 'page_click', args: { ref: dblBtn!.ref, clickCount: 2 } })
+    expect(dblClick.ok).toBe(true)
+    expect((await post('/tool', { tabId, name: 'page_eval', args: { expression: `document.getElementById('v3-log').textContent` } })).value).toBe('dbl-ok')
+
+    const dragRes = await post('/tool', { tabId, name: 'page_drag', args: { fromRef: dragSrc!.ref, toRef: dragDst!.ref, steps: 6 } })
+    expect(dragRes.ok).toBe(true)
+    expect((await post('/tool', { tabId, name: 'page_eval', args: { expression: `document.getElementById('v3-log').textContent` } })).value).toBe('drag-ok')
+
+    // Coordinate click via trusted CDP clickPoint
+    const ctxCenter = await post('/tool', { tabId, name: 'page_eval', args: { expression: `(() => { const r = document.getElementById('ctx-btn').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()` } })
+    const pt = ctxCenter.value as { x: number; y: number }
+    const coordClick = await post('/tool', { tabId, name: 'page_click', args: { x: pt.x, y: pt.y, button: 'right' } })
+    expect(coordClick.ok).toBe(true)
+    expect((await post('/tool', { tabId, name: 'page_eval', args: { expression: `document.getElementById('v3-log').textContent` } })).value).toBe('ctx-ok')
+
+    // Set-of-Marks screenshot covers iframe elements cleanly and removes overlay
+    const somShot = await post('/tool', { tabId, name: 'page_screenshot', args: { annotate: true } })
+    expect(somShot.ok).toBe(true)
+    expect((somShot.annotatedCount ?? 0)).toBeGreaterThanOrEqual(6)
+
+    // page_dialog: alert & confirm auto-handled without freezing, plus armed accept
+    const alertEval = await post('/tool', { tabId, name: 'page_eval', args: { expression: `(() => { alert('auto-alert'); return confirm('auto-confirm'); })()` } })
+    expect(alertEval.ok).toBe(true)
+    expect(alertEval.value).toBe(false)
+
+    const arm = await post('/tool', { tabId, name: 'page_dialog', args: { action: 'accept', promptText: 'TroyV3Prompt' } })
+    expect(arm.ok).toBe(true)
+    expect(arm.armed).toMatchObject({ accept: true, promptText: 'TroyV3Prompt' })
+
+    const confirmAccepted = await post('/tool', { tabId, name: 'page_eval', args: { expression: `confirm('proceed?')` } })
+    expect(confirmAccepted.ok).toBe(true)
+    expect(confirmAccepted.value).toBe(true)
+
+    const dlgStatus = await post('/tool', { tabId, name: 'page_dialog', args: { action: 'status' } })
+    expect(dlgStatus.ok).toBe(true)
+    expect(dlgStatus.armed).toBeNull()
+    expect((dlgStatus.history?.length ?? 0)).toBeGreaterThanOrEqual(3)
+    expect(dlgStatus.history?.[0]).toMatchObject({ type: 'alert', handled: 'auto-accept' })
+    expect(dlgStatus.history?.[1]).toMatchObject({ type: 'confirm', handled: 'auto-dismiss' })
+    expect(dlgStatus.history?.[2]).toMatchObject({ type: 'confirm', handled: 'armed-accept' })
+
+    const closedV3 = await post('/close', { tabId })
+    expect(closedV3.ok).toBe(true)
+  }, 30_000)
+
   it('troy CLI detects dead PID in agent-endpoint.json cleanly', async () => {
     const staleFile = path.join(dir, 'stale-endpoint.json')
     await writeFile(staleFile, JSON.stringify({ port: 0, pid: 99999999, agentPort: 19999, agentToken: 'dead' }))
@@ -271,6 +441,16 @@ describe('the agent socket', () => {
       stderr = String((err as { stderr?: string }).stderr ?? '')
     }
     expect(stderr).toMatch(/stale agent-endpoint\.json|no longer running/i)
+
+    const helpOut = execFileSync(process.execPath, [path.join(root, 'bin', 'troy.mjs'), '--help'], {
+      encoding: 'utf8',
+    })
+    expect(helpOut).toContain('drag')
+    expect(helpOut).toContain('upload')
+    expect(helpOut).toContain('dialog')
+    expect(helpOut).toContain('handoff')
+    expect(helpOut).toContain('--button')
+    expect(helpOut).toContain('--double')
   })
 
   it('refuses to close a tab it did not open, and closes one it did', async () => {

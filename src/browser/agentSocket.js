@@ -46,6 +46,7 @@ function originOf(value) {
  *   resolveTab: (tabId?: number) => { id: number, webContents: any } | null,
  *   openTab: (url?: string) => number | null,
  *   selectTab: (id: number) => void,
+ *   focusTab?: (id: number) => void,
  *   closeTab: (id: number) => void,
  *   resolve: (input: string) => { kind: string, url?: string, reason?: string },
  *   ocr: any,
@@ -113,6 +114,14 @@ export async function createAgentSocket(deps) {
         invalidate: () => port.invalidate(),
         pressKey: (combo) => port.pressKey(combo),
         hoverPoint: (x, y) => port.hoverPoint(x, y),
+        clickPoint: (x, y, opts) => port.clickPoint(x, y, opts),
+        dragPoints: (fromX, fromY, toX, toY, steps) => port.dragPoints(fromX, fromY, toX, toY, steps),
+        setFileInputFiles: (selector, files) => port.setFileInputFiles(selector, files),
+        handleDialog: (opts) => port.handleDialog(opts),
+        focusTab: () => {
+          if (deps.focusTab) deps.focusTab(resolved.id)
+          else deps.selectTab(resolved.id)
+        },
         history: (direction) => port.history(direction),
         screenshot: (opts) => port.screenshot(opts),
         getConsoleLogs: (opts) => port.getConsoleLogs(opts),

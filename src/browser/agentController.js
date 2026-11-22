@@ -20,6 +20,7 @@ import { createTabPort } from './tabPort.js'
  *   ocr?: import('../read/types.js').OcrEngine,
  *   fetchImpl?: (url: string, init: any) => Promise<any>,
  *   createPort?: typeof createTabPort,
+ *   focusTab?: (tabId: number) => void,
  *   memory?: { recordRead?: (context: any, result: any) => void, recordAction?: (event: any) => void, recall?: (query: string, opts?: any) => any },
  * }} deps
  */
@@ -171,6 +172,11 @@ export function createAgentController(deps) {
         invalidate: () => port.invalidate(),
         ...(port.pressKey ? { pressKey: (/** @type {string} */ combo) => port.pressKey(combo) } : {}),
         ...(port.hoverPoint ? { hoverPoint: (/** @type {number} */ x, /** @type {number} */ y) => port.hoverPoint(x, y) } : {}),
+        ...(port.clickPoint ? { clickPoint: (/** @type {number} */ x, /** @type {number} */ y, /** @type {any} */ opts) => port.clickPoint(x, y, opts) } : {}),
+        ...(port.dragPoints ? { dragPoints: (/** @type {number} */ fx, /** @type {number} */ fy, /** @type {number} */ tx, /** @type {number} */ ty, /** @type {number | undefined} */ steps) => port.dragPoints(fx, fy, tx, ty, steps) } : {}),
+        ...(port.setFileInputFiles ? { setFileInputFiles: (/** @type {string} */ sel, /** @type {string[]} */ files) => port.setFileInputFiles(sel, files) } : {}),
+        ...(port.handleDialog ? { handleDialog: (/** @type {any} */ opts) => port.handleDialog(opts) } : {}),
+        ...(deps.focusTab ? { focusTab: () => deps.focusTab?.(tab.id) } : {}),
         ...(port.history ? { history: (/** @type {'back' | 'forward' | 'reload'} */ direction) => port.history(direction) } : {}),
         ...(port.screenshot ? { screenshot: (/** @type {any} */ opts) => port.screenshot(opts) } : {}),
         ...(port.getConsoleLogs ? { getConsoleLogs: (/** @type {any} */ opts) => port.getConsoleLogs(opts) } : {}),

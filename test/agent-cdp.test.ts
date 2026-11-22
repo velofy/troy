@@ -3,6 +3,7 @@ import { launchHeadless } from '../src/cdp/playwright.js'
 import { resolveOmnibox } from '../src/browser/omnibox.js'
 import { createTools } from '../src/agent/tools.js'
 import { READ_PAGE_EXPRESSION, normaliseReadResult } from '../src/agent/read.js'
+import { DEEP_QUERY_ONE_EXPRESSION, GET_VIEWPORT_RECT_EXPRESSION } from '../src/agent/element-descriptor.js'
 
 /**
  * The same tools, against a real DOM. The unit tests in agent-tools.test.ts
@@ -277,5 +278,130 @@ describe('ARIA, open Shadow DOM, SPA inputs, and real-DOM browser-user tools', (
 
     const evalRes = await tools.run('page_eval', { expression: '2 + 40' })
     expect(evalRes).toEqual({ ok: true, value: 42 })
+  })
+})
+
+describe('v3.0 superpowers on a real Chromium DOM', () => {
+  it('pierces same-origin <iframe> with >>frame>>, computes exact viewport rects, and safely skips cross-origin/sandboxed iframes', async () => {
+    await open(`<!doctype html><title>iframe host</title>
+      <style>
+        body { margin: 0; padding: 0; }
+        #f1 { position: absolute; left: 120px; top: 90px; width: 420px; height: 260px; border: 4px solid #333; padding: 6px; box-sizing: content-box; }
+      </style>
+      <iframe id="f1" srcdoc="<!doctype html><style>body{margin:0;padding:10px;}</style><input id='fin' placeholder='Frame input'><button id='fbtn' type='button' onclick=&quot;document.getElementById('fout').textContent='iframe:' + document.getElementById('fin').value&quot;>Frame Go</button><p id='fout'>idle</p>"></iframe>
+      <iframe id="sandboxed" sandbox="" srcdoc="<button>Blocked</button>"></iframe>`)
+    // Wait briefly for srcdoc iframe to parse
+    await new Promise((r) => setTimeout(r, 150))
+
+    const read = await tools.run('page_read', {})
+    expect(read.error).toBeUndefined()
+    const interactive = read.interactive as Array<{ selector: string; placeholder?: string; text?: string }>
+    const frameInput = interactive.find((i) => i.placeholder === 'Frame input')
+    const frameBtn = interactive.find((i) => i.text === 'Frame Go')
+    expect(frameInput?.selector).toBe('#f1 >>frame>> #fin')
+    expect(frameBtn?.selector).toBe('#f1 >>frame>> #fbtn')
+    // Sandboxed iframe did not crash page_read and was safely skipped
+    expect(interactive.some((i) => i.text === 'Blocked')).toBe(false)
+
+    // Fill and click inside same-origin iframe; diffSnapshots detects change inside iframe
+    const fillRes = await tools.run('page_fill', { selector: frameInput!.selector, text: 'inside-frame' })
+    expect(fillRes.ok).toBe(true)
+
+    const clickRes = await tools.run('page_click', { selector: frameBtn!.selector })
+    expect(clickRes.ok).toBe(true)
+    expect(clickRes.changed).toBe(true)
+
+    const textRes = await tools.run('page_text', { selector: '#f1 >>frame>> #fout' })
+    expect(textRes.ok).toBe(true)
+    expect(textRes.text).toBe('iframe:inside-frame')
+
+    // Frame-accurate top-level viewport coordinates include iframe offset + border(4) + padding(6)
+    const rectJson = await cdp.evaluate<string>(`(() => {
+      const deepQueryOne = ${DEEP_QUERY_ONE_EXPRESSION};
+      const getViewportRect = ${GET_VIEWPORT_RECT_EXPRESSION};
+      const el = deepQueryOne(document, '#f1 >>frame>> #fbtn');
+      const local = el.getBoundingClientRect();
+      const top = getViewportRect(el);
+      return JSON.stringify({ localLeft: local.left, localTop: local.top, topLeft: top.left, topTop: top.top });
+    })()`)
+    const coords = JSON.parse(rectJson) as { localLeft: number; localTop: number; topLeft: number; topTop: number }
+    // iframe left=120 + border=4 + padding=6 = 130; iframe top=90 + border=4 + padding=6 = 100
+    expect(Math.round(coords.topLeft - coords.localLeft)).toBe(130)
+    expect(Math.round(coords.topTop - coords.localTop)).toBe(100)
+  })
+
+  it('supports right-click, double-click, coordinate click, and page_drag on a real DOM', async () => {
+    await open(`<!doctype html><title>mouse</title>
+      <style>
+        body { margin: 0; padding: 20px; }
+        #ctx, #dbl, #src, #dst { display: inline-block; width: 100px; height: 40px; margin: 10px; border: 1px solid #000; }
+      </style>
+      <button id="ctx" type="button">Context</button>
+      <button id="dbl" type="button">Double</button>
+      <div id="src" draggable="true">Drag Me</div>
+      <div id="dst">Drop Here</div>
+      <div id="log">init</div>
+      <script>
+        const log = document.getElementById('log');
+        document.getElementById('ctx').addEventListener('contextmenu', (e) => { e.preventDefault(); log.textContent = 'right-clicked'; });
+        document.getElementById('dbl').addEventListener('dblclick', () => { log.textContent = 'double-clicked'; });
+        document.getElementById('dst').addEventListener('drop', (e) => { e.preventDefault(); log.textContent = 'dropped'; });
+        document.getElementById('dst').addEventListener('dragover', (e) => e.preventDefault());
+      </script>`)
+
+    const rightRes = await tools.run('page_click', { selector: '#ctx', button: 'right' })
+    expect(rightRes.ok).toBe(true)
+    expect(await cdp.evaluate<string>(`document.getElementById('log').textContent`)).toBe('right-clicked')
+
+    const dblRes = await tools.run('page_click', { selector: '#dbl', clickCount: 2 })
+    expect(dblRes.ok).toBe(true)
+    expect(await cdp.evaluate<string>(`document.getElementById('log').textContent`)).toBe('double-clicked')
+
+    // Coordinate click on #ctx center
+    const ctxCenter = JSON.parse(await cdp.evaluate<string>(`(() => {
+      const r = document.getElementById('ctx').getBoundingClientRect();
+      return JSON.stringify({ x: r.left + r.width / 2, y: r.top + r.height / 2 });
+    })()`)) as { x: number; y: number }
+    const coordRes = await tools.run('page_click', { x: ctxCenter.x, y: ctxCenter.y, button: 'right' })
+    expect(coordRes.ok).toBe(true)
+    expect(await cdp.evaluate<string>(`document.getElementById('log').textContent`)).toBe('right-clicked')
+
+    // page_drag from #src to #dst
+    const dragRes = await tools.run('page_drag', { fromSelector: '#src', toSelector: '#dst', steps: 5 })
+    expect(dragRes.ok).toBe(true)
+    expect(await cdp.evaluate<string>(`document.getElementById('log').textContent`)).toBe('dropped')
+  })
+
+  it('runs page_handoff in non-blocking and wait modes and cleans up the banner', async () => {
+    await open(`<!doctype html><title>handoff test</title><h1>Login</h1><p id="status">waiting</p>`)
+
+    // Non-blocking injects banner with Resume Dexter button
+    const nb = await tools.run('page_handoff', { reason: 'Enter 2FA code', wait: false })
+    expect(nb).toMatchObject({ ok: true, waiting: false, reason: 'Enter 2FA code' })
+    const bannerText = await cdp.evaluate<string>(`document.getElementById('troy-handoff-banner')?.textContent || ''`)
+    expect(bannerText).toContain('Enter 2FA code')
+    expect(bannerText).toContain('Resume Dexter')
+
+    // Blocking mode resumed by clicking Resume Dexter button
+    setTimeout(() => {
+      void cdp.evaluate(`document.getElementById('troy-handoff-resume')?.click()`).catch(() => {})
+    }, 150)
+    const resumed = await tools.run('page_handoff', { reason: 'Click Resume', timeoutMs: 3000 })
+    expect(resumed.ok).toBe(true)
+    expect(resumed.resumedBy).toBe('user')
+    expect(await cdp.evaluate<boolean>(`document.getElementById('troy-handoff-banner') === null`)).toBe(true)
+
+    // Blocking mode resumed by waitForText
+    setTimeout(() => {
+      void cdp.evaluate(`document.getElementById('status').textContent = 'verified-ok'`).catch(() => {})
+    }, 150)
+    const textResumed = await tools.run('page_handoff', {
+      reason: 'Wait for verification',
+      waitForText: 'verified-ok',
+      timeoutMs: 3000,
+    })
+    expect(textResumed.ok).toBe(true)
+    expect(textResumed.resumedBy).toBe('text')
+    expect(await cdp.evaluate<boolean>(`document.getElementById('troy-handoff-banner') === null`)).toBe(true)
   })
 })

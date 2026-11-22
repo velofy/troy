@@ -14,13 +14,18 @@
 // history, eval, act) or free (read, find, recall, text, wait, screenshot,
 // console, network, scrape).
 
+import path from 'node:path'
 import {
   COLLECT_INTERACTIVE_EXPRESSION,
   DEEP_QUERY_ALL_EXPRESSION,
   DEEP_QUERY_ONE_EXPRESSION,
   ELEMENT_DESCRIPTOR_EXPRESSION,
+  GET_VIEWPORT_RECT_EXPRESSION,
   SELECTOR_FOR_EXPRESSION,
 } from './element-descriptor.js'
+import { validateUploadFiles } from './policy.js'
+
+export { validateUploadFiles }
 
 /** Result payloads larger than this are cut and flagged. */
 export const MAX_TOOL_RESULT_CHARS = 20000
@@ -53,6 +58,7 @@ const SUBMIT_PATTERN = /submit|commit|place (the )?order|checkout|pay\b|purchase
  * @property {boolean} editable
  * @property {number | null} maxLength
  * @property {boolean} readOnly
+ * @property {boolean} [multiple]
  * @property {string} [href]
  * @property {boolean} [download]
  * @property {string} [formAction]
@@ -223,6 +229,14 @@ const SNAPSHOT_EXPRESSION = `(() => {
         visited.add(el.shadowRoot)
         allRoots.push(el.shadowRoot)
       }
+      if (el.tagName === 'IFRAME' || el.tagName === 'FRAME') {
+        let frameDoc = null
+        try { frameDoc = el.contentDocument || null } catch { frameDoc = null }
+        if (frameDoc && !visited.has(frameDoc)) {
+          visited.add(frameDoc)
+          allRoots.push(frameDoc)
+        }
+      }
     }
   }
   const queryDeep = (sel) => {
@@ -252,15 +266,28 @@ const SNAPSHOT_EXPRESSION = `(() => {
     if (parts.length) states.push(key + ':' + parts.join(','))
   }
   let activeEl = document.activeElement
-  while (activeEl && activeEl.shadowRoot && activeEl.shadowRoot.activeElement) {
-    activeEl = activeEl.shadowRoot.activeElement
+  for (let depth = 0; depth < 16 && activeEl; depth++) {
+    if (activeEl.shadowRoot && activeEl.shadowRoot.activeElement) {
+      activeEl = activeEl.shadowRoot.activeElement
+      continue
+    }
+    if (activeEl.tagName === 'IFRAME' || activeEl.tagName === 'FRAME') {
+      let innerActive = null
+      try { innerActive = activeEl.contentDocument ? activeEl.contentDocument.activeElement : null } catch { innerActive = null }
+      if (innerActive && innerActive !== activeEl) {
+        activeEl = innerActive
+        continue
+      }
+    }
+    break
   }
   const active = activeEl
     ? activeEl.tagName.toLowerCase() + (activeEl.id ? '#' + activeEl.id : '') + (activeEl.getAttribute('name') ? '[name=' + activeEl.getAttribute('name') + ']' : '')
     : ''
   let text = body ? (body.innerText || '') : ''
   for (let i = 1; i < allRoots.length; i++) {
-    text += '\\n' + (allRoots[i].textContent || '')
+    const r = allRoots[i]
+    text += '\\n' + (r.body ? (r.body.innerText || r.body.textContent || '') : (r.textContent || ''))
   }
   let hash = 2166136261
   for (let i = 0; i < text.length; i++) {
@@ -284,44 +311,252 @@ const SNAPSHOT_EXPRESSION = `(() => {
   })
 })()`
 
-const CLICK_EXPRESSION = `(sel) => (() => {
+const SCROLL_INTO_VIEW_HELPER = `(function scrollIntoViewDeep(el) {
+  let win = el.ownerDocument && el.ownerDocument.defaultView
+  const frames = []
+  while (win && win !== window) {
+    let frameEl = null
+    try { frameEl = win.frameElement } catch { break }
+    if (!frameEl) break
+    frames.push(frameEl)
+    win = frameEl.ownerDocument && frameEl.ownerDocument.defaultView
+  }
+  for (let i = frames.length - 1; i >= 0; i--) {
+    try { frames[i].scrollIntoView({ block: 'nearest', inline: 'nearest' }) } catch {}
+  }
+  try { el.scrollIntoView({ block: 'center', inline: 'center' }) } catch {}
+})`
+
+const CLICK_EXPRESSION = `(cmd) => (() => {
   const deepQueryOne = ${DEEP_QUERY_ONE_EXPRESSION}
-  const el = deepQueryOne(document, sel)
+  const scrollIntoViewDeep = ${SCROLL_INTO_VIEW_HELPER}
+  const selector = typeof cmd === 'string' ? cmd : String(cmd.selector || '')
+  const button = typeof cmd === 'object' && cmd && cmd.button ? cmd.button : 'left'
+  const clickCount = typeof cmd === 'object' && cmd && cmd.clickCount ? Number(cmd.clickCount) : 1
+  const el = deepQueryOne(document, selector)
   if (!el) return JSON.stringify({ acted: false, reason: 'gone' })
-  el.scrollIntoView({ block: 'center' })
+  scrollIntoViewDeep(el)
+  const r = el.getBoundingClientRect()
+  const cx = r.left + r.width / 2
+  const cy = r.top + r.height / 2
+  const view = (el.ownerDocument && el.ownerDocument.defaultView) || window
+  const ME = view.MouseEvent || MouseEvent
+  const PE = view.PointerEvent || PointerEvent
+  if (button === 'right') {
+    const init = { bubbles: true, cancelable: true, composed: true, button: 2, buttons: 2, clientX: cx, clientY: cy }
+    el.dispatchEvent(new PE('pointerdown', init))
+    el.dispatchEvent(new ME('mousedown', init))
+    el.dispatchEvent(new PE('pointerup', { ...init, buttons: 0 }))
+    el.dispatchEvent(new ME('mouseup', { ...init, buttons: 0 }))
+    el.dispatchEvent(new ME('contextmenu', { ...init, buttons: 0 }))
+    return JSON.stringify({ acted: true })
+  }
+  if (button === 'middle') {
+    const init = { bubbles: true, cancelable: true, composed: true, button: 1, buttons: 4, clientX: cx, clientY: cy }
+    el.dispatchEvent(new PE('pointerdown', init))
+    el.dispatchEvent(new ME('mousedown', init))
+    el.dispatchEvent(new PE('pointerup', { ...init, buttons: 0 }))
+    el.dispatchEvent(new ME('mouseup', { ...init, buttons: 0 }))
+    el.dispatchEvent(new ME('auxclick', { ...init, buttons: 0 }))
+    return JSON.stringify({ acted: true })
+  }
+  if (clickCount >= 2) {
+    for (let i = 0; i < clickCount; i++) el.click()
+    el.dispatchEvent(new ME('dblclick', { bubbles: true, cancelable: true, composed: true, button: 0, detail: 2, clientX: cx, clientY: cy }))
+    return JSON.stringify({ acted: true })
+  }
   el.click()
   return JSON.stringify({ acted: true })
 })()`
 
-// SPA-grade fill: uses native prototype value setter so React/Vue/Svelte/Angular
-// controlled inputs observe the change, then fires composed InputEvent + change.
+// Scroll target into view and compute frame-accurate top-level viewport center
+// for trusted CDP clickPoint; falls back to el.click() if hidden/offscreen.
+const CLICK_PREPARE_EXPRESSION = `(cmd) => (() => {
+  const deepQueryOne = ${DEEP_QUERY_ONE_EXPRESSION}
+  const getViewportRect = ${GET_VIEWPORT_RECT_EXPRESSION}
+  const scrollIntoViewDeep = ${SCROLL_INTO_VIEW_HELPER}
+  const el = deepQueryOne(document, cmd.selector)
+  if (!el) return JSON.stringify({ found: false, acted: false })
+  scrollIntoViewDeep(el)
+  const vr = getViewportRect(el)
+  const cx = vr.left + vr.width / 2
+  const cy = vr.top + vr.height / 2
+  const inViewport =
+    vr.width > 0 &&
+    vr.height > 0 &&
+    cx >= 0 &&
+    cy >= 0 &&
+    cx <= (window.innerWidth || 0) &&
+    cy <= (window.innerHeight || 0)
+  if (!inViewport) {
+    if (cmd.button === 'left' && cmd.clickCount === 1) {
+      el.click()
+      return JSON.stringify({ found: true, visible: false, acted: true })
+    }
+    return JSON.stringify({ found: true, visible: false, acted: false, x: cx, y: cy })
+  }
+  return JSON.stringify({ found: true, visible: true, acted: false, x: cx, y: cy })
+})()`
+
+// JS fallback for coordinate click when host.clickPoint is absent.
+const CLICK_COORD_JS_EXPRESSION = `(cmd) => (() => {
+  let doc = document
+  let lx = Number(cmd.x)
+  let ly = Number(cmd.y)
+  let target = null
+  for (let depth = 0; depth < 16; depth++) {
+    const hit = doc && typeof doc.elementFromPoint === 'function' ? doc.elementFromPoint(lx, ly) : null
+    if (!hit) break
+    target = hit
+    if (hit.shadowRoot && typeof hit.shadowRoot.elementFromPoint === 'function') {
+      const inner = hit.shadowRoot.elementFromPoint(lx, ly)
+      if (inner && inner !== hit) {
+        target = inner
+        doc = hit.shadowRoot
+        continue
+      }
+    }
+    if (hit.tagName === 'IFRAME' || hit.tagName === 'FRAME') {
+      let frameDoc = null
+      try { frameDoc = hit.contentDocument || null } catch { frameDoc = null }
+      if (frameDoc) {
+        const fr = hit.getBoundingClientRect()
+        const parentWin = hit.ownerDocument && hit.ownerDocument.defaultView
+        const style = parentWin && typeof parentWin.getComputedStyle === 'function' ? parentWin.getComputedStyle(hit) : null
+        const bL = style ? (parseFloat(style.borderLeftWidth) || 0) : 0
+        const bT = style ? (parseFloat(style.borderTopWidth) || 0) : 0
+        const pL = style ? (parseFloat(style.paddingLeft) || 0) : 0
+        const pT = style ? (parseFloat(style.paddingTop) || 0) : 0
+        lx = lx - fr.left - bL - pL
+        ly = ly - fr.top - bT - pT
+        doc = frameDoc
+        continue
+      }
+    }
+    break
+  }
+  if (!target) return JSON.stringify({ acted: false })
+  const view = (target.ownerDocument && target.ownerDocument.defaultView) || window
+  const ME = view.MouseEvent || MouseEvent
+  const PE = view.PointerEvent || PointerEvent
+  const button = cmd.button || 'left'
+  const clickCount = Number(cmd.clickCount || 1)
+  const btnCode = button === 'right' ? 2 : button === 'middle' ? 1 : 0
+  const btnMask = button === 'right' ? 2 : button === 'middle' ? 4 : 1
+  const init = { bubbles: true, cancelable: true, composed: true, button: btnCode, buttons: btnMask, clientX: lx, clientY: ly }
+  for (let c = 1; c <= clickCount; c++) {
+    target.dispatchEvent(new PE('pointerdown', { ...init, detail: c }))
+    target.dispatchEvent(new ME('mousedown', { ...init, detail: c }))
+    target.dispatchEvent(new PE('pointerup', { ...init, buttons: 0, detail: c }))
+    target.dispatchEvent(new ME('mouseup', { ...init, buttons: 0, detail: c }))
+    if (button === 'left') {
+      target.dispatchEvent(new ME('click', { ...init, buttons: 0, detail: c }))
+    }
+  }
+  if (button === 'left' && clickCount >= 2) {
+    target.dispatchEvent(new ME('dblclick', { ...init, buttons: 0, detail: 2 }))
+  } else if (button === 'right') {
+    target.dispatchEvent(new ME('contextmenu', { ...init, buttons: 0 }))
+  } else if (button === 'middle') {
+    target.dispatchEvent(new ME('auxclick', { ...init, buttons: 0 }))
+  }
+  return JSON.stringify({ acted: true, tag: target.tagName.toLowerCase() })
+})()`
+
+// Compute frame-accurate top-level viewport center of one element.
+const ELEMENT_CENTER_EXPRESSION = `(sel) => (() => {
+  const deepQueryOne = ${DEEP_QUERY_ONE_EXPRESSION}
+  const getViewportRect = ${GET_VIEWPORT_RECT_EXPRESSION}
+  const scrollIntoViewDeep = ${SCROLL_INTO_VIEW_HELPER}
+  const el = deepQueryOne(document, sel)
+  if (!el) return JSON.stringify({ found: false })
+  scrollIntoViewDeep(el)
+  const vr = getViewportRect(el)
+  const visible = vr.width > 0 || vr.height > 0
+  return JSON.stringify({
+    found: true,
+    visible,
+    x: vr.left + vr.width / 2,
+    y: vr.top + vr.height / 2,
+  })
+})()`
+
+// JS pointer + HTML5 drag-and-drop fallback when host.dragPoints is absent.
+const DRAG_JS_EXPRESSION = `(cmd) => (() => {
+  const deepQueryOne = ${DEEP_QUERY_ONE_EXPRESSION}
+  const fromEl = cmd.fromSelector
+    ? deepQueryOne(document, cmd.fromSelector)
+    : document.elementFromPoint(cmd.fromX, cmd.fromY)
+  const toEl = cmd.toSelector
+    ? deepQueryOne(document, cmd.toSelector)
+    : document.elementFromPoint(cmd.toX, cmd.toY)
+  const startTarget = fromEl || document.body || document.documentElement
+  const endTarget = toEl || startTarget
+  if (!startTarget) return JSON.stringify({ acted: false })
+  const view = (startTarget.ownerDocument && startTarget.ownerDocument.defaultView) || window
+  const ME = view.MouseEvent || MouseEvent
+  const PE = view.PointerEvent || PointerEvent
+  const DE = view.DragEvent || DragEvent
+  const steps = Math.max(1, Number(cmd.steps || 10))
+  startTarget.dispatchEvent(new PE('pointerdown', { bubbles: true, cancelable: true, composed: true, button: 0, buttons: 1, clientX: cmd.fromX, clientY: cmd.fromY }))
+  startTarget.dispatchEvent(new ME('mousedown', { bubbles: true, cancelable: true, composed: true, button: 0, buttons: 1, clientX: cmd.fromX, clientY: cmd.fromY }))
+  let dt = null
+  try { dt = new (view.DataTransfer || DataTransfer)() } catch { dt = null }
+  try {
+    startTarget.dispatchEvent(new DE('dragstart', { bubbles: true, cancelable: true, composed: true, clientX: cmd.fromX, clientY: cmd.fromY, ...(dt ? { dataTransfer: dt } : {}) }))
+  } catch {}
+  for (let i = 1; i <= steps; i++) {
+    const t = i / steps
+    const mx = cmd.fromX + (cmd.toX - cmd.fromX) * t
+    const my = cmd.fromY + (cmd.toY - cmd.fromY) * t
+    const moveTarget = i === steps ? endTarget : startTarget
+    moveTarget.dispatchEvent(new PE('pointermove', { bubbles: true, cancelable: true, composed: true, button: 0, buttons: 1, clientX: mx, clientY: my }))
+    moveTarget.dispatchEvent(new ME('mousemove', { bubbles: true, cancelable: true, composed: true, button: 0, buttons: 1, clientX: mx, clientY: my }))
+  }
+  try {
+    endTarget.dispatchEvent(new DE('dragenter', { bubbles: true, cancelable: true, composed: true, clientX: cmd.toX, clientY: cmd.toY, ...(dt ? { dataTransfer: dt } : {}) }))
+    endTarget.dispatchEvent(new DE('dragover', { bubbles: true, cancelable: true, composed: true, clientX: cmd.toX, clientY: cmd.toY, ...(dt ? { dataTransfer: dt } : {}) }))
+    endTarget.dispatchEvent(new DE('drop', { bubbles: true, cancelable: true, composed: true, clientX: cmd.toX, clientY: cmd.toY, ...(dt ? { dataTransfer: dt } : {}) }))
+    startTarget.dispatchEvent(new DE('dragend', { bubbles: true, cancelable: true, composed: true, clientX: cmd.toX, clientY: cmd.toY, ...(dt ? { dataTransfer: dt } : {}) }))
+  } catch {}
+  endTarget.dispatchEvent(new PE('pointerup', { bubbles: true, cancelable: true, composed: true, button: 0, buttons: 0, clientX: cmd.toX, clientY: cmd.toY }))
+  endTarget.dispatchEvent(new ME('mouseup', { bubbles: true, cancelable: true, composed: true, button: 0, buttons: 0, clientX: cmd.toX, clientY: cmd.toY }))
+  return JSON.stringify({ acted: true })
+})()`
+
+// SPA-grade fill: uses native prototype value setter from the element's own
+// realm so React/Vue/Svelte/Angular controlled inputs (including inside
+// same-origin iframes) observe the change, then fires composed InputEvent + change.
 const FILL_EXPRESSION = `(cmd) => (() => {
   const deepQueryOne = ${DEEP_QUERY_ONE_EXPRESSION}
   const el = deepQueryOne(document, cmd.selector)
   if (!el) return JSON.stringify({ acted: false, reason: 'gone' })
   el.scrollIntoView({ block: 'center' })
   el.focus()
+  const view = (el.ownerDocument && el.ownerDocument.defaultView) || window
+  const IE = view.InputEvent || InputEvent
+  const EV = view.Event || Event
   const fireInput = () => {
     try {
-      el.dispatchEvent(new InputEvent('input', {
+      el.dispatchEvent(new IE('input', {
         bubbles: true,
         composed: true,
         data: cmd.text,
         inputType: cmd.text === '' ? 'deleteContentBackward' : 'insertText',
       }))
     } catch {
-      el.dispatchEvent(new Event('input', { bubbles: true, composed: true }))
+      el.dispatchEvent(new EV('input', { bubbles: true, composed: true }))
     }
-    el.dispatchEvent(new Event('change', { bubbles: true, composed: true }))
+    el.dispatchEvent(new EV('change', { bubbles: true, composed: true }))
   }
   if (el.isContentEditable) {
     el.textContent = cmd.text
     fireInput()
   } else {
     const proto = el.tagName === 'TEXTAREA'
-      ? HTMLTextAreaElement.prototype
+      ? (view.HTMLTextAreaElement || HTMLTextAreaElement).prototype
       : el.tagName === 'INPUT'
-        ? HTMLInputElement.prototype
+        ? (view.HTMLInputElement || HTMLInputElement).prototype
         : null
     const setter = proto ? Object.getOwnPropertyDescriptor(proto, 'value')?.set : null
     if (setter) setter.call(el, cmd.text)
@@ -340,7 +575,7 @@ const READBACK_EXPRESSION = `(sel) => (() => {
 })()`
 
 // A dropdown is matched by its option value or label. Uses native prototype
-// value setter + composed input/change events so framework listeners see it.
+// value setter from the element's own realm + composed input/change events.
 const SELECT_EXPRESSION = `(cmd) => (() => {
   const deepQueryOne = ${DEEP_QUERY_ONE_EXPRESSION}
   const el = deepQueryOne(document, cmd.selector)
@@ -358,11 +593,13 @@ const SELECT_EXPRESSION = `(cmd) => (() => {
   }
   el.scrollIntoView({ block: 'center' })
   el.focus()
-  const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set
+  const view = (el.ownerDocument && el.ownerDocument.defaultView) || window
+  const EV = view.Event || Event
+  const setter = Object.getOwnPropertyDescriptor((view.HTMLSelectElement || HTMLSelectElement).prototype, 'value')?.set
   if (setter) setter.call(el, match.value)
   else el.value = match.value
-  el.dispatchEvent(new Event('input', { bubbles: true, composed: true }))
-  el.dispatchEvent(new Event('change', { bubbles: true, composed: true }))
+  el.dispatchEvent(new EV('input', { bubbles: true, composed: true }))
+  el.dispatchEvent(new EV('change', { bubbles: true, composed: true }))
   el.blur()
   return JSON.stringify({ acted: true, value: match.value, label: (match.textContent || '').trim() })
 })()`
@@ -566,20 +803,28 @@ const SCROLL_EXPRESSION = `(cmd) => (() => {
 
 const HOVER_TARGET_EXPRESSION = `(cmd) => (() => {
   const deepQueryOne = ${DEEP_QUERY_ONE_EXPRESSION}
+  const getViewportRect = ${GET_VIEWPORT_RECT_EXPRESSION}
+  const scrollIntoViewDeep = ${SCROLL_INTO_VIEW_HELPER}
   const el = deepQueryOne(document, cmd.selector)
   if (!el) return JSON.stringify({ found: false })
-  el.scrollIntoView({ block: 'center', inline: 'center' })
-  const r = el.getBoundingClientRect()
-  const visible = r.width > 0 || r.height > 0
-  const x = r.left + r.width / 2
-  const y = r.top + r.height / 2
+  scrollIntoViewDeep(el)
+  const vr = getViewportRect(el)
+  const visible = vr.width > 0 || vr.height > 0
+  const x = vr.left + vr.width / 2
+  const y = vr.top + vr.height / 2
   if (visible && cmd.dispatchJs) {
-    const init = { bubbles: true, cancelable: true, composed: true, clientX: x, clientY: y }
-    el.dispatchEvent(new PointerEvent('pointerover', init))
-    el.dispatchEvent(new PointerEvent('pointerenter', { ...init, bubbles: false }))
-    el.dispatchEvent(new MouseEvent('mouseover', init))
-    el.dispatchEvent(new MouseEvent('mouseenter', { ...init, bubbles: false }))
-    el.dispatchEvent(new MouseEvent('mousemove', init))
+    const lr = el.getBoundingClientRect()
+    const lx = lr.left + lr.width / 2
+    const ly = lr.top + lr.height / 2
+    const view = (el.ownerDocument && el.ownerDocument.defaultView) || window
+    const PE = view.PointerEvent || PointerEvent
+    const ME = view.MouseEvent || MouseEvent
+    const init = { bubbles: true, cancelable: true, composed: true, clientX: lx, clientY: ly }
+    el.dispatchEvent(new PE('pointerover', init))
+    el.dispatchEvent(new PE('pointerenter', { ...init, bubbles: false }))
+    el.dispatchEvent(new ME('mouseover', init))
+    el.dispatchEvent(new ME('mouseenter', { ...init, bubbles: false }))
+    el.dispatchEvent(new ME('mousemove', init))
   }
   return JSON.stringify({ found: true, visible, x, y })
 })()`
@@ -589,7 +834,8 @@ const WAIT_CHECK_EXPRESSION = `(cmd) => (() => {
   const isVisible = (el) => {
     const r = el.getBoundingClientRect()
     if (r.width <= 0 && r.height <= 0) return false
-    const style = window.getComputedStyle(el)
+    const view = (el.ownerDocument && el.ownerDocument.defaultView) || window
+    const style = view.getComputedStyle(el)
     return style.visibility !== 'hidden' && style.display !== 'none' && Number(style.opacity || '1') > 0
   }
   let matched = true
@@ -598,8 +844,19 @@ const WAIT_CHECK_EXPRESSION = `(cmd) => (() => {
   }
   if (matched && cmd.text) {
     const body = document.body
-    const content = body ? (body.innerText || body.textContent || '') : ''
-    if (!content.includes(cmd.text)) matched = false
+    let content = body ? (body.innerText || body.textContent || '') : ''
+    if (!content.includes(cmd.text)) {
+      let foundInFrame = false
+      for (const iframe of document.querySelectorAll('iframe, frame')) {
+        let fdoc = null
+        try { fdoc = iframe.contentDocument || null } catch { fdoc = null }
+        if (fdoc && fdoc.body && (fdoc.body.innerText || fdoc.body.textContent || '').includes(cmd.text)) {
+          foundInFrame = true
+          break
+        }
+      }
+      if (!foundInFrame) matched = false
+    }
   }
   if (matched && cmd.selector) {
     let matches = []
@@ -618,10 +875,12 @@ const WAIT_CHECK_EXPRESSION = `(cmd) => (() => {
 
 const ELEMENT_CLIP_EXPRESSION = `(sel) => (() => {
   const deepQueryOne = ${DEEP_QUERY_ONE_EXPRESSION}
+  const getViewportRect = ${GET_VIEWPORT_RECT_EXPRESSION}
+  const scrollIntoViewDeep = ${SCROLL_INTO_VIEW_HELPER}
   const el = deepQueryOne(document, sel)
   if (!el) return JSON.stringify({ found: false })
-  el.scrollIntoView({ block: 'center', inline: 'center' })
-  const r = el.getBoundingClientRect()
+  scrollIntoViewDeep(el)
+  const r = getViewportRect(el)
   if (r.width <= 0 || r.height <= 0) return JSON.stringify({ found: true, visible: false })
   return JSON.stringify({
     found: true,
@@ -631,9 +890,11 @@ const ELEMENT_CLIP_EXPRESSION = `(sel) => (() => {
 })()`
 
 // Set-of-Marks visual overlay for annotated screenshots. Always removed in a
-// finally block immediately after capture.
+// finally block immediately after capture. Uses frame-accurate viewport rects
+// so controls inside same-origin iframes get pixel-exact overlays too.
 const INJECT_SOM_EXPRESSION = `(targets) => (() => {
   const deepQueryOne = ${DEEP_QUERY_ONE_EXPRESSION}
+  const getViewportRect = ${GET_VIEWPORT_RECT_EXPRESSION}
   const existing = document.getElementById('__troy_som_overlay')
   if (existing) existing.remove()
   const container = document.createElement('div')
@@ -647,7 +908,7 @@ const INJECT_SOM_EXPRESSION = `(targets) => (() => {
     let el = null
     try { el = deepQueryOne(document, t.selector) } catch { continue }
     if (!el) continue
-    const r = el.getBoundingClientRect()
+    const r = getViewportRect(el)
     if (r.width <= 0 || r.height <= 0) continue
     if (r.bottom < 0 || r.right < 0 || r.top > window.innerHeight || r.left > window.innerWidth) continue
     const color = palette[i % palette.length]
@@ -691,6 +952,100 @@ const REMOVE_SOM_EXPRESSION = `(() => {
   return 'ok'
 })()`
 
+// Human-in-the-loop handoff banner. Uses textContent exclusively (never innerHTML)
+// so untrusted text cannot inject markup. Always cleaned up in finally when waiting.
+const INJECT_HANDOFF_BANNER_EXPRESSION = `(reason) => (() => {
+  window.__troyHandoffResumed = false
+  const existing = document.getElementById('troy-handoff-banner')
+  if (existing) existing.remove()
+  const bar = document.createElement('div')
+  bar.id = 'troy-handoff-banner'
+  bar.setAttribute('role', 'status')
+  bar.style.cssText = [
+    'position:fixed',
+    'top:0',
+    'left:0',
+    'right:0',
+    'z-index:2147483647',
+    'display:flex',
+    'align-items:center',
+    'justify-content:space-between',
+    'gap:14px',
+    'padding:12px 18px',
+    'background:#0f172a',
+    'color:#f8fafc',
+    'border-bottom:2px solid #f59e0b',
+    'box-shadow:0 8px 24px rgba(0,0,0,0.35)',
+    'font:500 14px/1.4 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif',
+  ].join(';')
+  const left = document.createElement('div')
+  left.style.cssText = 'display:flex;align-items:center;gap:10px;min-width:0;'
+  const badge = document.createElement('span')
+  badge.textContent = 'ACTION NEEDED'
+  badge.style.cssText = [
+    'background:#f59e0b',
+    'color:#0f172a',
+    'font:700 11px/1 ui-monospace,SFMono-Regular,Menlo,monospace',
+    'padding:4px 7px',
+    'border-radius:4px',
+    'letter-spacing:0.04em',
+    'flex-shrink:0',
+  ].join(';')
+  const msg = document.createElement('span')
+  msg.textContent = String(reason || '')
+  msg.style.cssText = 'color:#f8fafc;word-break:break-word;'
+  left.appendChild(badge)
+  left.appendChild(msg)
+  const btn = document.createElement('button')
+  btn.id = 'troy-handoff-resume'
+  btn.type = 'button'
+  btn.textContent = 'Resume Dexter'
+  btn.style.cssText = [
+    'background:#10b981',
+    'color:#022c22',
+    'border:none',
+    'border-radius:6px',
+    'padding:8px 14px',
+    'font:700 13px/1 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif',
+    'cursor:pointer',
+    'flex-shrink:0',
+  ].join(';')
+  btn.addEventListener('click', () => {
+    window.__troyHandoffResumed = true
+    bar.remove()
+  })
+  bar.appendChild(left)
+  bar.appendChild(btn)
+  ;(document.body || document.documentElement)?.appendChild(bar)
+  return JSON.stringify({ url: location.href, title: document.title || '' })
+})()`
+
+const CHECK_HANDOFF_EXPRESSION = `(cmd) => (() => {
+  const url = String(location.href || '')
+  const title = String(document.title || '')
+  if (window.__troyHandoffResumed === true) {
+    return JSON.stringify({ resumedBy: 'user', url, title, hasBanner: Boolean(document.getElementById('troy-handoff-banner')) })
+  }
+  if (cmd.waitForUrl && url.includes(cmd.waitForUrl)) {
+    return JSON.stringify({ resumedBy: 'url', url, title, hasBanner: Boolean(document.getElementById('troy-handoff-banner')) })
+  }
+  if (cmd.waitForText) {
+    const body = document.body
+    const content = body ? (body.innerText || body.textContent || '') : ''
+    if (content.includes(cmd.waitForText)) {
+      return JSON.stringify({ resumedBy: 'text', url, title, hasBanner: Boolean(document.getElementById('troy-handoff-banner')) })
+    }
+  }
+  return JSON.stringify({ resumedBy: '', url, title, hasBanner: Boolean(document.getElementById('troy-handoff-banner')) })
+})()`
+
+const REMOVE_HANDOFF_BANNER_EXPRESSION = `(() => {
+  const el = document.getElementById('troy-handoff-banner')
+  if (el) el.remove()
+  try { delete window.__troyHandoffResumed } catch {}
+  return 'ok'
+})()`
+
 const PAGE_META_EXPRESSION = `(() => JSON.stringify({ url: location.href, title: document.title || '' }))()`
 
 /**
@@ -706,6 +1061,11 @@ const PAGE_META_EXPRESSION = `(() => JSON.stringify({ url: location.href, title:
  * @property {() => void} [invalidate] invalidate the page/document epoch
  * @property {(combo: string) => Promise<void>} [pressKey] dispatch a trusted CDP keyboard press
  * @property {(x: number, y: number) => Promise<void>} [hoverPoint] dispatch a trusted CDP mouse move
+ * @property {(x: number, y: number, opts?: { button?: 'left' | 'right' | 'middle', clickCount?: number }) => Promise<void>} [clickPoint] dispatch a trusted CDP mouse click
+ * @property {(fromX: number, fromY: number, toX: number, toY: number, steps?: number) => Promise<void>} [dragPoints] dispatch a trusted CDP mouse drag
+ * @property {(selector: string, files: string[]) => Promise<void>} [setFileInputFiles] populate a file input via CDP DOM.setFileInputFiles
+ * @property {(opts?: { action?: 'accept' | 'dismiss' | 'status', promptText?: string }) => Promise<Record<string, any>>} [handleDialog] inspect/arm/handle JS dialogs
+ * @property {() => void | Promise<void>} [focusTab] show/focus the browser window and activate this tab
  * @property {(direction: 'back' | 'forward' | 'reload') => Promise<{ ok: boolean, url?: string, title?: string, error?: string }>} [history] navigate browser history
  * @property {(opts?: { fullPage?: boolean, clip?: { x: number, y: number, width: number, height: number } }) => Promise<{ mimeType: string, data: string, width?: number, height?: number }>} [screenshot] capture PNG screenshot
  * @property {(opts?: { clear?: boolean, level?: string, limit?: number }) => { count: number, entries: any[] } | Promise<{ count: number, entries: any[] }>} [getConsoleLogs] read per-tab console ring buffer
@@ -997,6 +1357,50 @@ export function createTools(host, options = {}) {
   }
 
   async function pageClick(/** @type {any} */ args) {
+    const button = args.button !== undefined ? String(args.button).toLowerCase() : 'left'
+    if (!['left', 'right', 'middle'].includes(button)) {
+      return { error: `invalid click button "${button}"; use left, right, or middle` }
+    }
+    const clickCount = args.clickCount !== undefined ? Number(args.clickCount) : 1
+    if (!Number.isInteger(clickCount) || clickCount < 1 || clickCount > 3) {
+      return { error: 'clickCount must be an integer between 1 and 3' }
+    }
+    const hasTarget = options.elements ? args.ref !== undefined : args.selector !== undefined
+    const hasCoords = args.x !== undefined || args.y !== undefined
+
+    // Coordinate click for canvas/OCR regions when no ref/selector is given
+    if (!hasTarget && hasCoords) {
+      const x = Number(args.x)
+      const y = Number(args.y)
+      if (!Number.isFinite(x) || !Number.isFinite(y)) {
+        return { error: 'coordinate click requires finite numeric x and y' }
+      }
+      if (options.authorize) {
+        const currentUrl = String(host.context?.().url ?? '')
+        const denied = refusal(options.authorize({ name: 'page_click', currentUrl }))
+        if (denied) return denied
+      }
+      assertNotAborted()
+      const typedButton = /** @type {'left' | 'right' | 'middle'} */ (button)
+      if (host.clickPoint) {
+        await host.clickPoint(x, y, { button: typedButton, clickCount })
+      } else {
+        await evalJson(`(${CLICK_COORD_JS_EXPRESSION})(${JSON.stringify({ x, y, button: typedButton, clickCount })})`)
+      }
+      await host.settle()
+      if (options.authorize && host.context) {
+        const boundary = refusal(options.authorize({ name: 'page_navigate', targetUrl: host.context().url }))
+        if (boundary) return boundary
+      }
+      return {
+        ok: true,
+        x: Math.round(x),
+        y: Math.round(y),
+        button: typedButton,
+        clickCount,
+      }
+    }
+
     const found = await inspectOne(args)
     if ('error' in found) return found
     const item = /** @type {InspectItem} */ (found.item)
@@ -1027,7 +1431,20 @@ export function createTools(host, options = {}) {
 
     const before = await evalJson(SNAPSHOT_EXPRESSION)
     assertNotAborted()
-    await host.evaluate(`(${CLICK_EXPRESSION})(${JSON.stringify(selector)})`)
+    const typedButton = /** @type {'left' | 'right' | 'middle'} */ (button)
+    if (host.clickPoint) {
+      const prep = await evalJson(
+        `(${CLICK_PREPARE_EXPRESSION})(${JSON.stringify({ selector, button: typedButton, clickCount })})`,
+      )
+      if (!prep?.found) return { error: 'element is no longer on the page' }
+      if (prep.visible) {
+        await host.clickPoint(Number(prep.x), Number(prep.y), { button: typedButton, clickCount })
+      } else if (!prep.acted) {
+        await host.evaluate(`(${CLICK_EXPRESSION})(${JSON.stringify({ selector, button: typedButton, clickCount })})`)
+      }
+    } else {
+      await host.evaluate(`(${CLICK_EXPRESSION})(${JSON.stringify({ selector, button: typedButton, clickCount })})`)
+    }
     await host.settle()
     const after = await evalJson(SNAPSHOT_EXPRESSION)
     // Refs survive a same-document action: inspection re-verifies the
@@ -1054,9 +1471,237 @@ export function createTools(host, options = {}) {
         changed: false,
         note: 'NOT VERIFIED: the click ran but nothing observably changed on the page',
         reasons,
+        ...(typedButton !== 'left' ? { button: typedButton } : {}),
+        ...(clickCount !== 1 ? { clickCount } : {}),
       }
     }
-    return { ok: true, changed: true, pageChanged: true, reasons }
+    return {
+      ok: true,
+      changed: true,
+      pageChanged: true,
+      reasons,
+      ...(typedButton !== 'left' ? { button: typedButton } : {}),
+      ...(clickCount !== 1 ? { clickCount } : {}),
+    }
+  }
+
+  async function pageDrag(/** @type {any} */ args) {
+    const currentUrl = String(host.context?.().url ?? '')
+    if (options.authorize) {
+      const denied = refusal(options.authorize({ name: 'page_drag', currentUrl }))
+      if (denied) return denied
+    }
+    const steps = Math.min(Math.max(Math.round(Number(args.steps ?? 10) || 10), 1), 60)
+
+    let fromX = Number(args.fromX)
+    let fromY = Number(args.fromY)
+    let fromSelector = ''
+    const hasFromTarget = options.elements ? args.fromRef !== undefined : args.fromSelector !== undefined
+    if (hasFromTarget) {
+      const found = await inspectOne(options.elements ? { ref: args.fromRef } : { selector: args.fromSelector })
+      if ('error' in found) return found
+      const item = /** @type {InspectItem} */ (found.item)
+      fromSelector = String(found.selector ?? args.fromSelector ?? '')
+      if (item.disabled) return { error: 'the drag source control is disabled' }
+      if (item.type === 'password') return { error: 'password fields are never operated by the agent' }
+      if (options.authorize) {
+        const denied = refusal(options.authorize({ name: 'page_drag', item, currentUrl }))
+        if (denied) return denied
+      }
+      const center = await evalJson(`(${ELEMENT_CENTER_EXPRESSION})(${JSON.stringify(fromSelector)})`)
+      if (!center?.found || !center?.visible) return { error: 'drag source element is not visible' }
+      fromX = Number(center.x)
+      fromY = Number(center.y)
+    } else if (!Number.isFinite(fromX) || !Number.isFinite(fromY)) {
+      return { error: 'page_drag requires fromRef (or fromSelector) or finite fromX and fromY' }
+    }
+
+    let toX = Number(args.toX)
+    let toY = Number(args.toY)
+    let toSelector = ''
+    const hasToTarget = options.elements ? args.toRef !== undefined : args.toSelector !== undefined
+    if (hasToTarget) {
+      const found = await inspectOne(options.elements ? { ref: args.toRef } : { selector: args.toSelector })
+      if ('error' in found) return found
+      const item = /** @type {InspectItem} */ (found.item)
+      toSelector = String(found.selector ?? args.toSelector ?? '')
+      if (item.type === 'password') return { error: 'password fields are never operated by the agent' }
+      if (options.authorize) {
+        const denied = refusal(options.authorize({ name: 'page_drag', item, currentUrl }))
+        if (denied) return denied
+      }
+      const center = await evalJson(`(${ELEMENT_CENTER_EXPRESSION})(${JSON.stringify(toSelector)})`)
+      if (!center?.found || !center?.visible) return { error: 'drag target element is not visible' }
+      toX = Number(center.x)
+      toY = Number(center.y)
+    } else if (!Number.isFinite(toX) || !Number.isFinite(toY)) {
+      return { error: 'page_drag requires toRef (or toSelector) or finite toX and toY' }
+    }
+
+    assertNotAborted()
+    if (host.dragPoints) {
+      await host.dragPoints(fromX, fromY, toX, toY, steps)
+    } else {
+      await evalJson(
+        `(${DRAG_JS_EXPRESSION})(${JSON.stringify({
+          fromSelector: fromSelector || undefined,
+          toSelector: toSelector || undefined,
+          fromX,
+          fromY,
+          toX,
+          toY,
+          steps,
+        })})`,
+      )
+    }
+    await host.settle()
+    return {
+      ok: true,
+      from: { x: Math.round(fromX), y: Math.round(fromY) },
+      to: { x: Math.round(toX), y: Math.round(toY) },
+      steps,
+    }
+  }
+
+  async function pageUpload(/** @type {any} */ args) {
+    const validated = validateUploadFiles(args.files)
+    if (!validated.ok) {
+      return {
+        ok: false,
+        ...(validated.blocked ? { blocked: true } : {}),
+        ...(validated.code ? { code: validated.code } : {}),
+        error: validated.error,
+      }
+    }
+    const found = await inspectOne(args)
+    if ('error' in found) return found
+    const item = /** @type {InspectItem} */ (found.item)
+    const selector = String(found.selector ?? args.selector ?? '')
+    if (item.disabled) return { error: 'that file input is disabled' }
+    if (item.tag !== 'input' || String(item.type || '').toLowerCase() !== 'file') {
+      return { error: `<${item.tag}> is not a file input; page_upload only operates <input type="file"> elements` }
+    }
+    if (options.authorize) {
+      const currentUrl = String(host.context?.().url ?? '')
+      const denied = refusal(options.authorize({ name: 'page_upload', item, currentUrl }))
+      if (denied) return denied
+    }
+    if (validated.files.length > 1 && item.multiple === false) {
+      return { error: `that file input does not accept multiple files (${validated.files.length} given)` }
+    }
+    if (!host.setFileInputFiles) {
+      return { error: 'file upload is unavailable in this host' }
+    }
+    assertNotAborted()
+    await host.setFileInputFiles(selector, validated.files)
+    await host.settle()
+    return {
+      ok: true,
+      files: validated.files.map((f) => path.basename(f)),
+      count: validated.files.length,
+    }
+  }
+
+  async function pageDialog(/** @type {any} */ args) {
+    const action = args.action !== undefined ? String(args.action).toLowerCase() : 'status'
+    if (!['accept', 'dismiss', 'status'].includes(action)) {
+      return { error: `invalid dialog action "${action}"; use accept, dismiss, or status` }
+    }
+    if (!host.handleDialog) {
+      return { error: 'dialog handling is unavailable in this host' }
+    }
+    assertNotAborted()
+    const typedAction = /** @type {'accept' | 'dismiss' | 'status'} */ (action)
+    return host.handleDialog({
+      action: typedAction,
+      ...(args.promptText !== undefined ? { promptText: String(args.promptText) } : {}),
+    })
+  }
+
+  async function pageHandoff(/** @type {any} */ args) {
+    const reason = String(args.reason ?? '').trim()
+    if (!reason) {
+      return { error: 'page_handoff requires a reason explaining what the human should do' }
+    }
+    assertNotAborted()
+    if (host.focusTab) {
+      try {
+        await host.focusTab()
+      } catch {
+        // Window focus is best-effort in headless environments.
+      }
+    }
+    const meta = await evalJson(`(${INJECT_HANDOFF_BANNER_EXPRESSION})(${JSON.stringify(reason)})`)
+    const initialUrl = String(meta?.url ?? host.context?.().url ?? '')
+    const initialTitle = String(meta?.title ?? '')
+
+    if (args.wait === false) {
+      return {
+        ok: true,
+        waiting: false,
+        reason,
+        url: initialUrl,
+        title: initialTitle,
+      }
+    }
+
+    const startedAt = Date.now()
+    const timeoutMs = Math.min(Math.max(Number(args.timeoutMs ?? 120_000) || 120_000, 100), 300_000)
+    const deadline = startedAt + timeoutMs
+    const waitForUrl = args.waitForUrl !== undefined ? String(args.waitForUrl) : ''
+    const waitForText = args.waitForText !== undefined ? String(args.waitForText) : ''
+    let lastUrl = initialUrl
+    let lastTitle = initialTitle
+
+    try {
+      while (true) {
+        assertNotAborted()
+        let check = null
+        try {
+          check = await evalJson(
+            `(${CHECK_HANDOFF_EXPRESSION})(${JSON.stringify({ waitForUrl, waitForText })})`,
+          )
+        } catch {
+          // Page may be mid-navigation during human interaction; retry until deadline.
+          check = null
+        }
+        if (check && typeof check === 'object') {
+          if (check.url) lastUrl = String(check.url)
+          if (check.title !== undefined) lastTitle = String(check.title)
+          if (check.resumedBy) {
+            await host.settle().catch(() => undefined)
+            if (lastUrl && lastUrl !== initialUrl) {
+              options.elements?.invalidate()
+              host.invalidate?.()
+            }
+            return {
+              ok: true,
+              resumedBy: String(check.resumedBy),
+              elapsedMs: Date.now() - startedAt,
+              url: lastUrl,
+              title: lastTitle,
+            }
+          }
+          // If the human navigated to a new page before finishing, re-show the banner.
+          if (check.hasBanner === false) {
+            await evalJson(`(${INJECT_HANDOFF_BANNER_EXPRESSION})(${JSON.stringify(reason)})`).catch(() => undefined)
+          }
+        }
+        const remaining = deadline - Date.now()
+        if (remaining <= 0) {
+          return {
+            ok: false,
+            error: 'handoff timed out',
+            elapsedMs: Date.now() - startedAt,
+            url: lastUrl,
+            title: lastTitle,
+          }
+        }
+        await sleep(Math.min(150, remaining), options.signal)
+      }
+    } finally {
+      await host.evaluate(REMOVE_HANDOFF_BANNER_EXPRESSION).catch(() => undefined)
+    }
   }
 
   async function pageFill(/** @type {any} */ args) {
@@ -1644,6 +2289,7 @@ export function createTools(host, options = {}) {
     const batchAllowSubmit = args.allowSubmit === true
     const dispatch = /** @type {Record<string, (a: any) => Promise<any>>} */ ({
       click: (op) => pageClick({ ...op, allowSubmit: op.allowSubmit ?? batchAllowSubmit }),
+      drag: pageDrag,
       fill: pageFill,
       select: pageSelect,
       text: pageText,
@@ -1676,6 +2322,10 @@ export function createTools(host, options = {}) {
     page_text: pageText,
     page_navigate: pageNavigate,
     page_click: pageClick,
+    page_drag: pageDrag,
+    page_upload: pageUpload,
+    page_dialog: pageDialog,
+    page_handoff: pageHandoff,
     page_fill: pageFill,
     page_select: pageSelect,
     page_press: pagePress,
@@ -1736,7 +2386,7 @@ export function createTools(host, options = {}) {
     },
     {
       name: 'page_act',
-      description: 'Run several actions in order (click/fill/select/text/read/press/hover/scroll/wait) as one call. The first error or refusal stops the sequence.',
+      description: 'Run several actions in order (click/drag/fill/select/text/read/press/hover/scroll/wait) as one call. The first error or refusal stops the sequence.',
       gated: true,
       input: {
         type: 'object',
@@ -1744,7 +2394,7 @@ export function createTools(host, options = {}) {
           ops: {
             type: 'array',
             items: { type: 'object' },
-            description: 'ordered operations: {op, ref|selector, text|value|key|direction|...}',
+            description: 'ordered operations: {op, ref|selector, text|value|key|direction|button|clickCount|fromRef|toRef|...}',
           },
           allowSubmit: {
             type: 'boolean',
@@ -1787,15 +2437,101 @@ export function createTools(host, options = {}) {
     {
       name: 'page_click',
       description: options.elements
-        ? 'Click one element ref from the latest page_read. Irreversible controls are blocked unless allowSubmit is explicitly true; refs stay usable until the page navigates.'
-        : 'Click one element by selector. Submit-shaped controls are refused unless allowSubmit is true; the click must observably change the page or it reports NOT VERIFIED.',
+        ? 'Click one element ref from the latest page_read (supports left/right/middle button and double-click), or pass numeric viewport coordinates (x, y) for canvas/OCR regions. Irreversible controls are blocked unless allowSubmit is explicitly true.'
+        : 'Click one element by selector (supports left/right/middle button and double-click), or pass numeric viewport coordinates (x, y). Submit-shaped controls are refused unless allowSubmit is true.',
       gated: true,
       input: {
         type: 'object',
         properties: options.elements
-          ? { ...elementProperty, allowSubmit: { type: 'boolean', description: 'explicitly permit submit/commit click after human confirmation' } }
-          : { ...elementProperty, within: { type: 'string', description: 'optional container to scope the selector' }, allowSubmit: { type: 'boolean' } },
-        required: [elementKey],
+          ? {
+              ...elementProperty,
+              x: { type: 'number', description: 'viewport X coordinate (for coordinate click without ref)' },
+              y: { type: 'number', description: 'viewport Y coordinate (for coordinate click without ref)' },
+              button: { type: 'string', enum: ['left', 'right', 'middle'] },
+              clickCount: { type: 'integer', description: 'number of clicks (1 for single, 2 for double-click)' },
+              allowSubmit: { type: 'boolean', description: 'explicitly permit submit/commit click after human confirmation' },
+            }
+          : {
+              ...elementProperty,
+              within: { type: 'string', description: 'optional container to scope the selector' },
+              x: { type: 'number' },
+              y: { type: 'number' },
+              button: { type: 'string', enum: ['left', 'right', 'middle'] },
+              clickCount: { type: 'integer' },
+              allowSubmit: { type: 'boolean' },
+            },
+      },
+    },
+    {
+      name: 'page_drag',
+      description: 'Drag from a source element ref (or fromX/fromY coordinates) to a target element ref (or toX/toY coordinates) in smooth interpolated pointer steps.',
+      gated: true,
+      input: {
+        type: 'object',
+        properties: options.elements
+          ? {
+              fromRef: { type: 'string', description: 'source element ref' },
+              toRef: { type: 'string', description: 'target element ref' },
+              fromX: { type: 'number' },
+              fromY: { type: 'number' },
+              toX: { type: 'number' },
+              toY: { type: 'number' },
+              steps: { type: 'integer', description: 'number of interpolated move steps (default 10)' },
+            }
+          : {
+              fromSelector: { type: 'string' },
+              toSelector: { type: 'string' },
+              fromX: { type: 'number' },
+              fromY: { type: 'number' },
+              toX: { type: 'number' },
+              toY: { type: 'number' },
+              steps: { type: 'integer' },
+            },
+      },
+    },
+    {
+      name: 'page_upload',
+      description: 'Safely attach one or more local regular files to an <input type="file"> element after strict path-safety validation (sensitive secret paths are hard-blocked).',
+      gated: true,
+      input: {
+        type: 'object',
+        properties: {
+          ...elementProperty,
+          files: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'local file paths to attach (max 20 regular files)',
+          },
+        },
+        required: [elementKey, 'files'],
+      },
+    },
+    {
+      name: 'page_dialog',
+      description: 'Inspect JavaScript dialog history or arm/handle alert, confirm, and prompt dialogs without deadlocking.',
+      gated: true,
+      input: {
+        type: 'object',
+        properties: {
+          action: { type: 'string', enum: ['accept', 'dismiss', 'status'] },
+          promptText: { type: 'string', description: 'text to supply when accepting a prompt() dialog' },
+        },
+      },
+    },
+    {
+      name: 'page_handoff',
+      description: 'Focus the Troy browser window and display a human-in-the-loop banner (e.g. for CAPTCHA, 2FA, or payment confirmation), optionally waiting until the human clicks Resume Dexter or a URL/text condition is met.',
+      gated: false,
+      input: {
+        type: 'object',
+        properties: {
+          reason: { type: 'string', description: 'plain-language explanation of what the human needs to complete' },
+          wait: { type: 'boolean', description: 'whether to block until resumed (default true)' },
+          waitForUrl: { type: 'string', description: 'resume automatically when URL contains this substring' },
+          waitForText: { type: 'string', description: 'resume automatically when page text contains this substring' },
+          timeoutMs: { type: 'number', description: 'maximum wait in ms (default 120000, max 300000)' },
+        },
+        required: ['reason'],
       },
     },
     {

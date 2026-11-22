@@ -31,26 +31,40 @@ export const INTERACTIVE_SELECTOR = [
 ].join(', ')
 
 /**
- * Query all matching elements across light DOM and open Shadow DOM.
- * Supports normal CSS selectors as well as `>>>` shadow-root-piercing chains
- * (e.g. `#host >>> .inner >>> button`). Throws SyntaxError on empty or
- * malformed selectors so callers treat them identically to bad CSS selectors.
+ * Query all matching elements across light DOM, open Shadow DOM (`>>>`), and
+ * same-origin <iframe>/<frame> documents (`>>frame>>`).
+ * Supports arbitrary nesting (e.g. `#host >>> #frame >>frame>> .inner >>> button`).
+ * Cross-origin iframe access is wrapped in try/catch and safely skipped.
+ * Throws SyntaxError on empty or malformed selectors so callers treat them
+ * identically to bad CSS selectors.
  */
 export const DEEP_QUERY_ALL_EXPRESSION = `(function deepQueryAll(root, selector) {
   const raw = String(selector ?? '').trim()
   if (!raw) throw new SyntaxError('empty selector')
-  if (!raw.includes('>>>')) return Array.from(root.querySelectorAll(raw))
-  const parts = raw.split(/\\s*>>>\\s*/)
-  if (parts.some((p) => !p.trim())) throw new SyntaxError('malformed deep selector')
+  if (!raw.includes('>>>') && !raw.includes('>>frame>>')) {
+    return Array.from(root.querySelectorAll(raw))
+  }
+  const parts = raw.split(/\\s*(>>frame>>|>>>)\\s*/)
+  if (parts.length < 3 || parts.length % 2 === 0) {
+    throw new SyntaxError('malformed deep selector')
+  }
+  for (let i = 0; i < parts.length; i += 2) {
+    if (!parts[i].trim()) throw new SyntaxError('malformed deep selector')
+  }
   let roots = [root]
-  for (let i = 0; i < parts.length; i++) {
+  for (let i = 0; i < parts.length; i += 2) {
     const part = parts[i].trim()
+    const op = i + 1 < parts.length ? parts[i + 1] : null
     const next = []
     for (const r of roots) {
       const found = r.querySelectorAll(part)
       for (const el of found) {
-        if (i < parts.length - 1) {
+        if (op === '>>>') {
           if (el.shadowRoot) next.push(el.shadowRoot)
+        } else if (op === '>>frame>>') {
+          let frameDoc = null
+          try { frameDoc = el.contentDocument || null } catch { frameDoc = null }
+          if (frameDoc) next.push(frameDoc)
         } else {
           next.push(el)
         }
@@ -63,7 +77,8 @@ export const DEEP_QUERY_ALL_EXPRESSION = `(function deepQueryAll(root, selector)
 })`
 
 /**
- * Query the first matching element across light DOM and open Shadow DOM.
+ * Query the first matching element across light DOM, open Shadow DOM, and
+ * same-origin iframes.
  */
 export const DEEP_QUERY_ONE_EXPRESSION = `(function deepQueryOne(root, selector) {
   const matches = (${DEEP_QUERY_ALL_EXPRESSION})(root, selector)
@@ -71,8 +86,9 @@ export const DEEP_QUERY_ONE_EXPRESSION = `(function deepQueryOne(root, selector)
 })`
 
 /**
- * Collect all interactive elements from a root and every open ShadowRoot
- * beneath it, deduplicated in document/shadow traversal order.
+ * Collect all interactive elements from a root, every open ShadowRoot, and
+ * every accessible same-origin iframe document beneath it, deduplicated in
+ * document/shadow/frame traversal order.
  */
 export const COLLECT_INTERACTIVE_EXPRESSION = `(function collectInteractive(root) {
   const selector = ${JSON.stringify(INTERACTIVE_SELECTOR)}
@@ -90,6 +106,11 @@ export const COLLECT_INTERACTIVE_EXPRESSION = `(function collectInteractive(root
     }
     for (const el of node.querySelectorAll('*')) {
       if (el.shadowRoot) walk(el.shadowRoot)
+      if (el.tagName === 'IFRAME' || el.tagName === 'FRAME') {
+        let frameDoc = null
+        try { frameDoc = el.contentDocument || null } catch { frameDoc = null }
+        if (frameDoc) walk(frameDoc)
+      }
     }
   }
   walk(root)
@@ -97,20 +118,75 @@ export const COLLECT_INTERACTIVE_EXPRESSION = `(function collectInteractive(root
 })`
 
 /**
+ * Compute top-level viewport coordinates for any element, walking up nested
+ * same-origin iframe chains and summing each frameElement's bounding box
+ * (including frame border and padding offsets).
+ */
+export const GET_VIEWPORT_RECT_EXPRESSION = `(function getViewportRect(el) {
+  const r = el.getBoundingClientRect()
+  let offsetX = 0
+  let offsetY = 0
+  let win = el.ownerDocument && el.ownerDocument.defaultView
+  while (win && win !== window) {
+    let frameEl = null
+    try { frameEl = win.frameElement } catch { break }
+    if (!frameEl) break
+    const fr = frameEl.getBoundingClientRect()
+    const parentWin = frameEl.ownerDocument && frameEl.ownerDocument.defaultView
+    const style = parentWin && typeof parentWin.getComputedStyle === 'function'
+      ? parentWin.getComputedStyle(frameEl)
+      : null
+    const borderLeft = style ? (parseFloat(style.borderLeftWidth) || 0) : 0
+    const borderTop = style ? (parseFloat(style.borderTopWidth) || 0) : 0
+    const paddingLeft = style ? (parseFloat(style.paddingLeft) || 0) : 0
+    const paddingTop = style ? (parseFloat(style.paddingTop) || 0) : 0
+    offsetX += fr.left + borderLeft + paddingLeft
+    offsetY += fr.top + borderTop + paddingTop
+    win = parentWin
+  }
+  const left = r.left + offsetX
+  const top = r.top + offsetY
+  const width = r.width
+  const height = r.height
+  return {
+    x: left,
+    y: top,
+    left,
+    top,
+    right: left + width,
+    bottom: top + height,
+    width,
+    height,
+  }
+})`
+
+/**
  * A stable, unique selector for one element, as an in-page named function
  * expression (named so it can recurse). An id wins outright; without one the
  * element's position among its tag siblings is the fallback, which survives
  * styling changes that would break class names. Open Shadow DOM boundaries
- * are encoded with ` >>> ` so deepQueryAll resolves back to the exact node.
+ * are encoded with ` >>> ` and same-origin iframe boundaries with ` >>frame>> `
+ * so deepQueryAll resolves back to the exact node.
  * Shared between the page_read walk and the page_find query, so both hand out
  * selectors from one rule.
  */
 export const SELECTOR_FOR_EXPRESSION = `(function selectorFor(el) {
-  const root = typeof el.getRootNode === 'function' ? el.getRootNode() : null
-  const shadowHost = root && root !== document && root.host ? root.host : null
+  const ownerDoc = el.ownerDocument || document
+  const root = typeof el.getRootNode === 'function' ? el.getRootNode() : ownerDoc
+  const shadowHost = root && root !== ownerDoc && root.host ? root.host : null
+  let frameEl = null
+  if (ownerDoc && ownerDoc !== document) {
+    try {
+      frameEl = ownerDoc.defaultView && ownerDoc.defaultView.frameElement ? ownerDoc.defaultView.frameElement : null
+    } catch {
+      frameEl = null
+    }
+  }
   if (el.id) {
     const idSel = '#' + CSS.escape(el.id)
-    return shadowHost ? selectorFor(shadowHost) + ' >>> ' + idSel : idSel
+    if (shadowHost) return selectorFor(shadowHost) + ' >>> ' + idSel
+    if (frameEl) return selectorFor(frameEl) + ' >>frame>> ' + idSel
+    return idSel
   }
   const parent = el.parentElement
   if (!parent) {
@@ -118,6 +194,9 @@ export const SELECTOR_FOR_EXPRESSION = `(function selectorFor(el) {
       const sameTag = Array.from(root.children || []).filter((c) => c.tagName === el.tagName)
       const index = Math.max(1, sameTag.indexOf(el) + 1)
       return selectorFor(shadowHost) + ' >>> ' + el.tagName.toLowerCase() + ':nth-of-type(' + index + ')'
+    }
+    if (frameEl) {
+      return selectorFor(frameEl) + ' >>frame>> ' + el.tagName.toLowerCase()
     }
     return el.tagName.toLowerCase()
   }
@@ -169,6 +248,7 @@ export const ELEMENT_DESCRIPTOR_EXPRESSION = `(el) => {
     editable,
     maxLength: el.maxLength >= 0 ? el.maxLength : null,
     readOnly: Boolean(el.readOnly),
+    multiple: Boolean(el.multiple),
     label,
     ariaLabel,
     autocomplete,

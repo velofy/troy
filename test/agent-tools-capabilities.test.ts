@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'vitest'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import { createTools, MAX_INTERACTIVE_ELEMENTS, MAX_TOOL_RESULT_CHARS } from '../src/agent/tools.js'
 import { ElementRegistry } from '../src/agent/elements.js'
 import { authorizeAction } from '../src/agent/policy.js'
@@ -67,7 +70,10 @@ describe('in-app element capability tools', () => {
     const read = await tools.run('page_read', {})
     expect(read.interactive).toEqual([expect.objectContaining({ ref: 'e1', text: 'More details' })])
     expect(JSON.stringify(read)).not.toContain('#action')
-    expect(tools.specs.find((spec) => spec.name === 'page_click')?.input.required).toEqual(['ref'])
+    expect(tools.specs.find((spec) => spec.name === 'page_fill')?.input.required).toEqual(['ref'])
+    expect(tools.specs.find((spec) => spec.name === 'page_upload')?.input.required).toEqual(['ref', 'files'])
+    expect(tools.specs.find((spec) => spec.name === 'page_click')?.input.properties).toHaveProperty('ref')
+    expect(tools.specs.find((spec) => spec.name === 'page_click')?.input.properties).not.toHaveProperty('selector')
     expect(tools.specs.some((spec) => spec.name === 'page_scrape')).toBe(false)
   })
 
@@ -416,5 +422,192 @@ describe('in-app element capability tools', () => {
 
     const denied = await tools.run('page_eval', { expression: '1 + 1' })
     expect(denied).toMatchObject({ ok: false, blocked: true, boundary: true, code: 'origin' })
+  })
+
+  it('supports coordinate page_click, trusted clickPoint options, page_drag, and page_act drag/button forwarding', async () => {
+    const elements = new ElementRegistry()
+    const clicks: Array<{ x: number; y: number; opts?: unknown }> = []
+    const drags: Array<{ fx: number; fy: number; tx: number; ty: number; steps?: number }> = []
+    const evalQueue: unknown[] = []
+    const tools = createTools({
+      read: async () => ({
+        url: 'https://example.com/',
+        title: 'drag',
+        interactive: [
+          { selector: '#src', tag: 'button', type: 'button', text: 'Card', signature: 'src' },
+          { selector: '#dst', tag: 'div', role: 'button', text: 'Done', signature: 'dst' },
+        ],
+      }),
+      evaluate: async () => evalQueue.shift(),
+      resolve: resolveOmnibox,
+      load: async () => ({}),
+      exec: async () => ({ missing: 'disabled' }),
+      settle: async () => {},
+      context: () => ({ tabId: 1, url: 'https://example.com/', epoch: 0 }),
+      invalidate: () => {},
+      clickPoint: async (x: number, y: number, opts?: unknown) => {
+        clicks.push({ x, y, opts })
+      },
+      dragPoints: async (fx: number, fy: number, tx: number, ty: number, steps?: number) => {
+        drags.push({ fx, fy, tx, ty, steps })
+      },
+    }, {
+      elements,
+      includeScrape: false,
+      authorize: (req) => authorizeAction({ ...req, allowedOrigins: new Set(['https://example.com']) }),
+    })
+
+    await tools.run('page_read', {})
+
+    // Coordinate click
+    const coordRes = await tools.run('page_click', { x: 240, y: 180, button: 'right', clickCount: 1 })
+    expect(coordRes).toEqual({ ok: true, x: 240, y: 180, button: 'right', clickCount: 1 })
+    expect(clicks[0]).toEqual({ x: 240, y: 180, opts: { button: 'right', clickCount: 1 } })
+
+    // page_act forwarding double-click + drag
+    evalQueue.push(
+      { count: 1, items: [{ tag: 'button', type: 'button', text: 'Card', signature: 'src' }] },
+      snapshotA,
+      { found: true, visible: true, acted: false, x: 50, y: 60 },
+      snapshotB,
+      { count: 1, items: [{ tag: 'button', type: 'button', text: 'Card', signature: 'src' }] },
+      { found: true, visible: true, x: 50, y: 60 },
+      { count: 1, items: [{ tag: 'div', role: 'button', text: 'Done', signature: 'dst' }] },
+      { found: true, visible: true, x: 350, y: 60 },
+    )
+    const batch = await tools.run('page_act', {
+      ops: [
+        { op: 'click', ref: 'e1', clickCount: 2 },
+        { op: 'drag', fromRef: 'e1', toRef: 'e2', steps: 5 },
+      ],
+    })
+    expect(batch.ok).toBe(true)
+    expect(clicks[1]).toEqual({ x: 50, y: 60, opts: { button: 'left', clickCount: 2 } })
+    expect(drags[0]).toEqual({ fx: 50, fy: 60, tx: 350, ty: 60, steps: 5 })
+  })
+
+  it('page_upload validates file safety, enforces multiple attribute, and delegates to setFileInputFiles', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'troy-upload-tool-'))
+    const fileA = path.join(tmpDir, 'a.txt')
+    const fileB = path.join(tmpDir, 'b.txt')
+    fs.writeFileSync(fileA, 'A')
+    fs.writeFileSync(fileB, 'B')
+    try {
+      const elements = new ElementRegistry()
+      const uploads: Array<{ selector: string; files: string[] }> = []
+      const evalQueue: unknown[] = []
+      const tools = createTools({
+        read: async () => ({
+          url: 'https://example.com/upload',
+          title: 'upload',
+          interactive: [
+            { selector: '#up', tag: 'input', type: 'file', multiple: false, signature: 'up' },
+          ],
+        }),
+        evaluate: async () => evalQueue.shift(),
+        resolve: resolveOmnibox,
+        load: async () => ({}),
+        exec: async () => ({ missing: 'disabled' }),
+        settle: async () => {},
+        context: () => ({ tabId: 1, url: 'https://example.com/upload', epoch: 0 }),
+        invalidate: () => {},
+        setFileInputFiles: async (selector: string, files: string[]) => {
+          uploads.push({ selector, files })
+        },
+      }, {
+        elements,
+        includeScrape: false,
+        authorize: (req) => authorizeAction({ ...req, allowedOrigins: new Set(['https://example.com']) }),
+      })
+
+      await tools.run('page_read', {})
+
+      // Sensitive path hard-blocked before even inspecting the page
+      const blocked = await tools.run('page_upload', { ref: 'e1', files: ['/home/user/.ssh/id_rsa'] })
+      expect(blocked).toMatchObject({ ok: false, blocked: true, code: 'sensitive-path' })
+      expect(uploads).toHaveLength(0)
+
+      // Multiple files rejected when input does not allow multiple
+      evalQueue.push({ count: 1, items: [{ tag: 'input', type: 'file', multiple: false, signature: 'up' }] })
+      const multiErr = await tools.run('page_upload', { ref: 'e1', files: [fileA, fileB] })
+      expect(String(multiErr.error)).toMatch(/multiple/i)
+      expect(uploads).toHaveLength(0)
+
+      // Valid single file succeeds
+      evalQueue.push({ count: 1, items: [{ tag: 'input', type: 'file', multiple: false, signature: 'up' }] })
+      const ok = await tools.run('page_upload', { ref: 'e1', files: [fileA] })
+      expect(ok).toEqual({ ok: true, files: ['a.txt'], count: 1 })
+      expect(uploads).toHaveLength(1)
+      expect(uploads[0]?.selector).toBe('#up')
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  it('page_dialog delegates to host.handleDialog and page_handoff focuses tab + cleans up banner', async () => {
+    const dialogCalls: unknown[] = []
+    let focused = 0
+    let checks = 0
+    const evaluated: string[] = []
+    const tools = createTools({
+      read: async () => ({ url: 'https://example.com/', title: 'handoff', interactive: [] }),
+      evaluate: async (expr: string) => {
+        evaluated.push(expr)
+        if (expr.includes('troy-handoff-resume')) {
+          return JSON.stringify({ url: 'https://example.com/login', title: 'Login' })
+        }
+        if (expr.includes('__troyHandoffResumed')) {
+          checks += 1
+          if (checks >= 2) {
+            return JSON.stringify({ resumedBy: 'url', url: 'https://example.com/dashboard', title: 'Dashboard', hasBanner: true })
+          }
+          return JSON.stringify({ resumedBy: '', url: 'https://example.com/login', title: 'Login', hasBanner: true })
+        }
+        return 'ok'
+      },
+      resolve: resolveOmnibox,
+      load: async () => ({}),
+      exec: async () => ({ missing: 'disabled' }),
+      settle: async () => {},
+      context: () => ({ tabId: 1, url: 'https://example.com/login', epoch: 0 }),
+      invalidate: () => {},
+      handleDialog: async (opts?: unknown) => {
+        dialogCalls.push(opts)
+        return { ok: true, armed: { accept: true, promptText: 'hi' }, history: [] }
+      },
+      focusTab: () => {
+        focused += 1
+      },
+    }, { includeScrape: false })
+
+    const dlg = await tools.run('page_dialog', { action: 'accept', promptText: 'hi' })
+    expect(dlg).toMatchObject({ ok: true, armed: { accept: true, promptText: 'hi' } })
+    expect(dialogCalls).toEqual([{ action: 'accept', promptText: 'hi' }])
+
+    // Non-blocking handoff
+    const nonBlocking = await tools.run('page_handoff', { reason: 'Solve CAPTCHA', wait: false })
+    expect(nonBlocking).toEqual({
+      ok: true,
+      waiting: false,
+      reason: 'Solve CAPTCHA',
+      url: 'https://example.com/login',
+      title: 'Login',
+    })
+    expect(focused).toBe(1)
+
+    // Blocking handoff resumed by waitForUrl + banner cleanup in finally
+    const waited = await tools.run('page_handoff', {
+      reason: 'Complete login',
+      waitForUrl: '/dashboard',
+      timeoutMs: 3000,
+    })
+    expect(waited).toMatchObject({
+      ok: true,
+      resumedBy: 'url',
+      url: 'https://example.com/dashboard',
+      title: 'Dashboard',
+    })
+    expect(focused).toBe(2)
+    expect(evaluated.some((e) => e.includes('delete window.__troyHandoffResumed'))).toBe(true)
   })
 })

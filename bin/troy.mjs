@@ -25,7 +25,15 @@ Usage: troy <command> [args] [--json] [--tab <id>] [--endpoint <file>]
   read [--visual] [--since]          read the tab; --visual runs the OCR-fused pipeline
   find <query>                       matching interactive elements, as refs
   text [ref]                         exact text of one element, or full page text
-  click <ref> [--allow-submit]       click an element ref from read/find
+  click [ref] [--x <n> --y <n>] [--button left|right|middle] [--double] [--allow-submit]
+                                     click an element ref or viewport coordinates
+  drag [fromRef] [toRef] [--from-x <n> --from-y <n> --to-x <n> --to-y <n>] [--steps <n>]
+                                     drag between refs or coordinates
+  upload <ref> <file...>             safely upload local file(s) to <input type="file">
+  dialog [accept|dismiss|status] [--prompt <text>]
+                                     inspect or arm/handle JS alert/confirm/prompt dialogs
+  handoff <reason> [--no-wait] [--wait-url <s>] [--wait-text <s>] [--timeout <ms>]
+                                     focus browser & show human-in-the-loop resume banner
   fill <ref> <text> [--clear]        fill or clear a text field ref
   select <ref> <value>               choose a dropdown option by label or value
   press <key> [--ref <ref>]          send a keyboard key or shortcut chord
@@ -122,6 +130,18 @@ const VALUE_FLAGS = new Set([
   '--out',
   '--amount',
   '--direction',
+  '--button',
+  '--x',
+  '--y',
+  '--from-x',
+  '--from-y',
+  '--to-x',
+  '--to-y',
+  '--steps',
+  '--prompt',
+  '--prompt-text',
+  '--wait-url',
+  '--wait-text',
 ])
 
 const TOOL_COMMANDS = {
@@ -133,7 +153,54 @@ const TOOL_COMMANDS = {
   text: (args) => ['page_text', args[0] ? { ref: args[0] } : {}],
   click: (args, flags) => [
     'page_click',
-    { ref: args[0], ...(flags['allow-submit'] ? { allowSubmit: true } : {}) },
+    {
+      ...(args[0] ? { ref: args[0] } : {}),
+      ...(flags.x !== undefined ? { x: Number(flags.x) } : {}),
+      ...(flags.y !== undefined ? { y: Number(flags.y) } : {}),
+      ...(flags.button ? { button: String(flags.button) } : {}),
+      ...(flags.double ? { clickCount: 2 } : {}),
+      ...(flags['allow-submit'] ? { allowSubmit: true } : {}),
+    },
+  ],
+  drag: (args, flags) => [
+    'page_drag',
+    {
+      ...(args[0] ? { fromRef: args[0] } : {}),
+      ...(args[1] ? { toRef: args[1] } : {}),
+      ...(flags['from-x'] !== undefined ? { fromX: Number(flags['from-x']) } : {}),
+      ...(flags['from-y'] !== undefined ? { fromY: Number(flags['from-y']) } : {}),
+      ...(flags['to-x'] !== undefined ? { toX: Number(flags['to-x']) } : {}),
+      ...(flags['to-y'] !== undefined ? { toY: Number(flags['to-y']) } : {}),
+      ...(flags.steps !== undefined ? { steps: Number(flags.steps) } : {}),
+    },
+  ],
+  upload: (args) => [
+    'page_upload',
+    {
+      ref: args[0],
+      files: args.slice(1),
+    },
+  ],
+  dialog: (args, flags) => [
+    'page_dialog',
+    {
+      action: args[0] ?? 'status',
+      ...(flags.prompt !== undefined
+        ? { promptText: String(flags.prompt) }
+        : flags['prompt-text'] !== undefined
+          ? { promptText: String(flags['prompt-text']) }
+          : {}),
+    },
+  ],
+  handoff: (args, flags) => [
+    'page_handoff',
+    {
+      reason: args.join(' '),
+      ...(flags['no-wait'] ? { wait: false } : {}),
+      ...(flags['wait-url'] !== undefined ? { waitForUrl: String(flags['wait-url']) } : {}),
+      ...(flags['wait-text'] !== undefined ? { waitForText: String(flags['wait-text']) } : {}),
+      ...(flags.timeout !== undefined ? { timeoutMs: Number(flags.timeout) } : {}),
+    },
   ],
   fill: (args, flags) => [
     'page_fill',

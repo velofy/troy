@@ -4,6 +4,7 @@
 // run ends.
 
 import { READ_PAGE_EXPRESSION, normaliseReadResult } from '../agent/read.js'
+import { DEEP_QUERY_ONE_EXPRESSION } from '../agent/element-descriptor.js'
 import { readPage } from '../read/pipeline.js'
 import { toMarkdown } from '../read/render.js'
 import { settle } from '../read/settle.js'
@@ -113,6 +114,8 @@ export function createTabPort(wc, opts) {
   let attachedHere = false
   let attached = false
   let cdpEventsEnabled = false
+  let cdpReadyPromise = /** @type {Promise<void> | null} */ (null)
+  let disabledThrottling = false
   let closed = false
   let epoch = 0
   let queue = Promise.resolve()
@@ -123,6 +126,24 @@ export function createTabPort(wc, opts) {
   const networkLogs = []
   /** @type {Map<string, { url: string, method: string, type: string, ts: number }>} */
   const pendingRequests = new Map()
+  /** @type {{
+   *   armed: { accept: boolean, promptText?: string } | null,
+   *   pending: { type: string, message: string, defaultPrompt: string, url: string, ts: number } | null,
+   *   history: Array<{ type: string, message: string, defaultPrompt: string, url: string, handled: string, promptText?: string, ts: number }>,
+   * }} */
+  const dialogState = {
+    armed: null,
+    pending: null,
+    history: [],
+  }
+
+  /** @param {{ type: string, message: string, defaultPrompt: string, url: string, handled: string, promptText?: string, ts: number }} entry */
+  const pushDialogHistory = (entry) => {
+    dialogState.history.push(entry)
+    if (dialogState.history.length > MAX_LOG_ENTRIES) {
+      dialogState.history.splice(0, dialogState.history.length - MAX_LOG_ENTRIES)
+    }
+  }
 
   /** @param {{ level: string, text: string, source: string, line: number, ts: number }} entry */
   const pushConsole = (entry) => {
@@ -235,6 +256,43 @@ export function createTabPort(wc, opts) {
       })
       return
     }
+    if (method === 'Page.javascriptDialogOpening') {
+      const entry = {
+        type: String(params?.type ?? 'alert'),
+        message: String(params?.message ?? ''),
+        defaultPrompt: String(params?.defaultPrompt ?? ''),
+        url: String(params?.url ?? ''),
+        ts: Date.now(),
+      }
+      if (dialogState.armed) {
+        const armed = dialogState.armed
+        dialogState.armed = null
+        dialogState.pending = null
+        const handleParams = {
+          accept: armed.accept,
+          ...(armed.promptText !== undefined ? { promptText: armed.promptText } : {}),
+        }
+        void wc.debugger.sendCommand('Page.handleJavaScriptDialog', handleParams).catch(() => {})
+        pushDialogHistory({
+          ...entry,
+          handled: armed.accept ? 'armed-accept' : 'armed-dismiss',
+          ...(armed.promptText !== undefined ? { promptText: armed.promptText } : {}),
+        })
+      } else {
+        const accept = entry.type === 'alert'
+        dialogState.pending = null
+        void wc.debugger.sendCommand('Page.handleJavaScriptDialog', { accept }).catch(() => {})
+        pushDialogHistory({
+          ...entry,
+          handled: accept ? 'auto-accept' : 'auto-dismiss',
+        })
+      }
+      return
+    }
+    if (method === 'Page.javascriptDialogClosed') {
+      dialogState.pending = null
+      return
+    }
     if (method === 'Network.loadingFailed') {
       const requestId = String(params?.requestId ?? '')
       const req = pendingRequests.get(requestId)
@@ -259,20 +317,34 @@ export function createTabPort(wc, opts) {
 
   const ensureAttached = () => {
     assertUsable()
-    if (attached) return
-    attachedHere = !wc.debugger.isAttached()
-    if (attachedHere) wc.debugger.attach('1.3')
-    attached = true
+    if (!attached) {
+      attachedHere = !wc.debugger.isAttached()
+      if (attachedHere) wc.debugger.attach('1.3')
+      attached = true
+      try {
+        if (typeof wcAny.setBackgroundThrottling === 'function') {
+          wcAny.setBackgroundThrottling(false)
+          disabledThrottling = true
+        }
+      } catch {
+        // Optional Electron optimization for background agent tabs.
+      }
+    }
     if (!cdpEventsEnabled) {
       cdpEventsEnabled = true
       try {
         wc.debugger.on('message', onDebuggerMessage)
-        void wc.debugger.sendCommand('Runtime.enable').catch(() => {})
-        void wc.debugger.sendCommand('Network.enable').catch(() => {})
+        cdpReadyPromise = Promise.all([
+          Promise.resolve(wc.debugger.sendCommand('Runtime.enable')).catch(() => {}),
+          Promise.resolve(wc.debugger.sendCommand('Network.enable')).catch(() => {}),
+          Promise.resolve(wc.debugger.sendCommand('Page.enable')).catch(() => {}),
+          Promise.resolve(wc.debugger.sendCommand('Input.setInterceptDrags', { enabled: true })).catch(() => {}),
+        ]).then(() => undefined)
       } catch {
-        // Best-effort event subscriptions for console/network telemetry.
+        // Best-effort event subscriptions for console/network/dialog telemetry.
       }
     }
+    return cdpReadyPromise ?? Promise.resolve()
   }
 
   /** @param {() => Promise<any>} operation */
@@ -288,7 +360,7 @@ export function createTabPort(wc, opts) {
   /** @param {string} expression */
   const evaluate = (expression) =>
     serial(async () => {
-      ensureAttached()
+      await ensureAttached()
       const { result, exceptionDetails } = await wc.debugger.sendCommand('Runtime.evaluate', {
         expression,
         returnByValue: true,
@@ -337,7 +409,7 @@ export function createTabPort(wc, opts) {
     const fullPage = Boolean(options?.fullPage)
     const clip = options?.clip
     return serial(async () => {
-      ensureAttached()
+      await ensureAttached()
       /** @type {Record<string, any>} */
       const params = { format: 'png' }
       let width = 0
@@ -423,7 +495,7 @@ export function createTabPort(wc, opts) {
   const pressKey = (combo) => {
     const spec = parseKeyCombo(combo)
     return serial(async () => {
-      ensureAttached()
+      await ensureAttached()
       await wc.debugger.sendCommand('Input.dispatchKeyEvent', {
         type: 'rawKeyDown',
         modifiers: spec.modifiers,
@@ -463,7 +535,7 @@ export function createTabPort(wc, opts) {
    */
   const hoverPoint = (x, y) =>
     serial(async () => {
-      ensureAttached()
+      await ensureAttached()
       await wc.debugger.sendCommand('Input.dispatchMouseEvent', {
         type: 'mouseMoved',
         x: Math.round(x),
@@ -472,6 +544,191 @@ export function createTabPort(wc, opts) {
         buttons: 0,
       })
     })
+
+  /**
+   * Dispatch a trusted mouse click (left/right/middle, single/double/triple)
+   * via CDP Input.dispatchMouseEvent.
+   *
+   * @param {number} x
+   * @param {number} y
+   * @param {{ button?: 'left' | 'right' | 'middle', clickCount?: number }} [options]
+   */
+  const clickPoint = (x, y, options = {}) => {
+    const button = options?.button === 'right' || options?.button === 'middle' ? options.button : 'left'
+    const clickCount = Math.min(Math.max(Math.round(Number(options?.clickCount ?? 1) || 1), 1), 3)
+    const buttonsMask = button === 'right' ? 2 : button === 'middle' ? 4 : 1
+    const rx = Math.round(x)
+    const ry = Math.round(y)
+    return serial(async () => {
+      await ensureAttached()
+      await wc.debugger.sendCommand('Input.dispatchMouseEvent', {
+        type: 'mouseMoved',
+        x: rx,
+        y: ry,
+        button: 'none',
+        buttons: 0,
+      })
+      for (let count = 1; count <= clickCount; count++) {
+        await wc.debugger.sendCommand('Input.dispatchMouseEvent', {
+          type: 'mousePressed',
+          x: rx,
+          y: ry,
+          button,
+          buttons: buttonsMask,
+          clickCount: count,
+        })
+        await wc.debugger.sendCommand('Input.dispatchMouseEvent', {
+          type: 'mouseReleased',
+          x: rx,
+          y: ry,
+          button,
+          buttons: 0,
+          clickCount: count,
+        })
+      }
+    })
+  }
+
+  /**
+   * Dispatch a trusted pointer drag from (fromX, fromY) to (toX, toY) in
+   * interpolated steps via CDP Input.dispatchMouseEvent.
+   *
+   * @param {number} fromX
+   * @param {number} fromY
+   * @param {number} toX
+   * @param {number} toY
+   * @param {number} [steps]
+   */
+  const dragPoints = (fromX, fromY, toX, toY, steps = 10) => {
+    const count = Math.min(Math.max(Math.round(Number(steps) || 10), 1), 60)
+    const sx = Math.round(fromX)
+    const sy = Math.round(fromY)
+    const ex = Math.round(toX)
+    const ey = Math.round(toY)
+    return serial(async () => {
+      await ensureAttached()
+      await wc.debugger.sendCommand('Input.dispatchMouseEvent', {
+        type: 'mouseMoved',
+        x: sx,
+        y: sy,
+        button: 'none',
+        buttons: 0,
+      })
+      await wc.debugger.sendCommand('Input.dispatchMouseEvent', {
+        type: 'mousePressed',
+        x: sx,
+        y: sy,
+        button: 'left',
+        buttons: 1,
+        clickCount: 1,
+      })
+      for (let i = 1; i <= count; i++) {
+        const t = i / count
+        await wc.debugger.sendCommand('Input.dispatchMouseEvent', {
+          type: 'mouseMoved',
+          x: Math.round(sx + (ex - sx) * t),
+          y: Math.round(sy + (ey - sy) * t),
+          button: 'left',
+          buttons: 1,
+        })
+      }
+      await wc.debugger.sendCommand('Input.dispatchMouseEvent', {
+        type: 'mouseReleased',
+        x: ex,
+        y: ey,
+        button: 'left',
+        buttons: 0,
+        clickCount: 1,
+      })
+    })
+  }
+
+  /**
+   * Populate a `<input type="file">` element (including inside open Shadow DOM
+   * or same-origin iframes) via CDP DOM.setFileInputFiles.
+   *
+   * @param {string} selector
+   * @param {string[]} files
+   */
+  const setFileInputFiles = (selector, files) =>
+    serial(async () => {
+      await ensureAttached()
+      const expr = `(${DEEP_QUERY_ONE_EXPRESSION})(document, ${JSON.stringify(selector)})`
+      const evalRes = await wc.debugger.sendCommand('Runtime.evaluate', {
+        expression: expr,
+        returnByValue: false,
+      })
+      if (evalRes?.exceptionDetails) {
+        throw new Error(String(evalRes.exceptionDetails.text ?? evalRes.result?.description ?? 'file input lookup failed'))
+      }
+      const objectId = evalRes?.result?.objectId
+      if (!objectId || evalRes?.result?.subtype === 'null') {
+        throw new Error('file input element was not found')
+      }
+      try {
+        await wc.debugger.sendCommand('DOM.setFileInputFiles', {
+          objectId,
+          files,
+        })
+      } finally {
+        void wc.debugger.sendCommand('Runtime.releaseObject', { objectId }).catch(() => {})
+      }
+    })
+
+  /**
+   * Inspect, arm, or immediately handle JavaScript dialogs (alert/confirm/prompt).
+   * Runs outside the serial evaluation queue so handling a pending dialog can
+   * never deadlock behind an in-flight Runtime.evaluate.
+   *
+   * @param {{ action?: 'accept' | 'dismiss' | 'status', promptText?: string }} [options]
+   */
+  const handleDialog = async (options = {}) => {
+    const action = String(options?.action ?? 'status').toLowerCase()
+    if (action === 'status') {
+      return {
+        ok: true,
+        armed: dialogState.armed ? { ...dialogState.armed } : null,
+        pending: dialogState.pending ? { ...dialogState.pending } : null,
+        history: [...dialogState.history],
+      }
+    }
+    if (action !== 'accept' && action !== 'dismiss') {
+      return { ok: false, error: `invalid dialog action "${action}"; use accept, dismiss, or status` }
+    }
+    assertUsable()
+    await ensureAttached()
+    const accept = action === 'accept'
+    const hasPromptText = options?.promptText !== undefined && options?.promptText !== null
+    const promptText = hasPromptText ? String(options.promptText) : undefined
+    if (dialogState.pending) {
+      const pending = dialogState.pending
+      dialogState.pending = null
+      await wc.debugger.sendCommand('Page.handleJavaScriptDialog', {
+        accept,
+        ...(promptText !== undefined ? { promptText } : {}),
+      })
+      pushDialogHistory({
+        ...pending,
+        handled: accept ? 'accept' : 'dismiss',
+        ...(promptText !== undefined ? { promptText } : {}),
+      })
+      return {
+        ok: true,
+        handled: accept ? 'accept' : 'dismiss',
+        armed: dialogState.armed ? { ...dialogState.armed } : null,
+        history: [...dialogState.history],
+      }
+    }
+    dialogState.armed = {
+      accept,
+      ...(promptText !== undefined ? { promptText } : {}),
+    }
+    return {
+      ok: true,
+      armed: { ...dialogState.armed },
+      history: [...dialogState.history],
+    }
+  }
 
   /**
    * Wait briefly for a navigation/reload event to complete on wc.
@@ -588,6 +845,10 @@ export function createTabPort(wc, opts) {
     screenshot,
     pressKey,
     hoverPoint,
+    clickPoint,
+    dragPoints,
+    setFileInputFiles,
+    handleDialog,
     history,
     getConsoleLogs,
     getNetworkLogs,
@@ -652,6 +913,13 @@ export function createTabPort(wc, opts) {
         }
       }
       await queue.catch(() => undefined)
+      if (disabledThrottling && !wc.isDestroyed()) {
+        try {
+          wcAny.setBackgroundThrottling?.(true)
+        } catch {
+          // Renderer teardown already released it.
+        }
+      }
       if (attachedHere && !wc.isDestroyed() && wc.debugger.isAttached()) {
         try {
           wc.debugger.detach()

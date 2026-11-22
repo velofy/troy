@@ -1863,6 +1863,14 @@ if (!hasSingleInstanceLock) {
             return id
           },
           selectTab,
+          focusTab: (id) => {
+            if (win && !win.isDestroyed()) {
+              if (win.isMinimized()) win.restore()
+              win.show()
+              win.focus()
+            }
+            selectTab(id)
+          },
           closeTab,
           resolve: resolveNavigation,
           ocr: selectedOcr(),

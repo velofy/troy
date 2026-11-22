@@ -1,6 +1,106 @@
 // Deterministic autonomy policy. The model can request an action; only this
 // code decides whether Troy may execute it.
 
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+
+export const MAX_UPLOAD_FILES = 20
+
+const BLOCKED_UPLOAD_PATTERNS = [
+  { pattern: /(^|\/)\.ssh(\/|$)/i, label: 'SSH directory' },
+  { pattern: /(^|\/)\.aws(\/|$)/i, label: 'AWS credentials directory' },
+  { pattern: /(^|\/)\.gnupg(\/|$)/i, label: 'GnuPG directory' },
+  { pattern: /(^|\/)\.kube(\/|$)/i, label: 'Kubernetes config directory' },
+  { pattern: /(^|\/)\.config\/gcloud(\/|$)/i, label: 'GCloud config directory' },
+  { pattern: /^\/etc\/shadow$/i, label: '/etc/shadow' },
+  { pattern: /^\/etc\/passwd$/i, label: '/etc/passwd' },
+  { pattern: /(^|\/)\.env(\.[^/]*)?$/i, label: '.env file' },
+  { pattern: /(^|\/)id_(rsa|ed25519|ecdsa|dsa)(\.[^/]*)?$/i, label: 'SSH private key' },
+  { pattern: /(^|\/)agent-endpoint\.json$/i, label: 'Troy agent endpoint token file' },
+  { pattern: /(^|\/)agent-keys\.json$/i, label: 'Troy agent keys file' },
+  { pattern: /\.(pem|key)$/i, label: 'private key file' },
+]
+
+/**
+ * Normalize a filesystem path to forward slashes for cross-platform matching.
+ *
+ * @param {string} p
+ */
+function toPosixPath(p) {
+  return p.replace(/\\/g, '/')
+}
+
+/**
+ * Check whether a filesystem path matches any hard-blocked secret location.
+ *
+ * @param {string} filePath
+ * @returns {string | null}
+ */
+function blockedUploadReason(filePath) {
+  const normalized = toPosixPath(filePath)
+  for (const { pattern, label } of BLOCKED_UPLOAD_PATTERNS) {
+    if (pattern.test(normalized)) {
+      return `refusing to upload sensitive path (${label}): ${filePath}`
+    }
+  }
+  return null
+}
+
+/**
+ * Pure, defense-in-depth validator for local file paths supplied to page_upload.
+ * Rejects empty/oversized lists, sensitive secret paths (including symlinks to
+ * sensitive paths), missing files, and non-regular files (directories, sockets).
+ *
+ * @param {unknown} files
+ * @returns {{ ok: true, files: string[] } | { ok: false, error: string, blocked?: boolean, code?: string }}
+ */
+export function validateUploadFiles(files) {
+  if (!Array.isArray(files) || files.length === 0) {
+    return { ok: false, error: 'files must be a non-empty array of local file paths' }
+  }
+  if (files.length > MAX_UPLOAD_FILES) {
+    return { ok: false, error: `cannot upload more than ${MAX_UPLOAD_FILES} files at once` }
+  }
+  /** @type {string[]} */
+  const resolvedFiles = []
+  for (const raw of files) {
+    if (typeof raw !== 'string' || !raw.trim() || raw.includes('\0')) {
+      return { ok: false, error: 'every upload file path must be a non-empty string' }
+    }
+    const trimmed = raw.trim()
+    const expanded = /^~([\\/]|$)/.test(trimmed)
+      ? path.join(os.homedir(), trimmed.slice(1))
+      : trimmed
+    const resolved = path.resolve(expanded)
+    const directBlocked = blockedUploadReason(resolved)
+    if (directBlocked) {
+      return { ok: false, blocked: true, code: 'sensitive-path', error: directBlocked }
+    }
+    /** @type {fs.Stats} */
+    let stat
+    try {
+      stat = fs.statSync(resolved)
+    } catch {
+      return { ok: false, error: `upload file does not exist: ${trimmed}` }
+    }
+    if (!stat.isFile()) {
+      return { ok: false, error: `upload path must be a regular file, not a directory or special file: ${trimmed}` }
+    }
+    try {
+      const real = fs.realpathSync(resolved)
+      const realBlocked = blockedUploadReason(real)
+      if (realBlocked) {
+        return { ok: false, blocked: true, code: 'sensitive-path', error: realBlocked }
+      }
+      resolvedFiles.push(real)
+    } catch {
+      resolvedFiles.push(resolved)
+    }
+  }
+  return { ok: true, files: resolvedFiles }
+}
+
 export const SENSITIVE_PATTERNS = Object.freeze({
   secret: /password|passcode|passkey|one[- ]?time(?: code)?|\botp\b|\bpin\b|verification[- ]?code|security[- ]?code|recovery[- ]?(?:code|phrase)|seed[- ]?phrase|private[- ]?key|api[- ]?key|secret[- ]?key|auth[- ]?token/i,
   payment: /card[- ]?number|credit[- ]?card|debit[- ]?card|\bcvv\b|\bcvc\b|expiry|expiration|routing[- ]?number|bank[- ]?account|account[- ]?number|iban|swift|sort[- ]?code|payment|billing/i,
@@ -131,6 +231,47 @@ export function authorizeAction(request) {
       }
     }
     return { allowed: true }
+  }
+
+  if (request.name === 'page_upload') {
+    const origin = exactOrigin(request.currentUrl)
+    if (!origin) {
+      return { allowed: false, status: 'blocked', code: 'scheme', reason: 'page_upload may run only on HTTP or HTTPS pages' }
+    }
+    if (!allowed.has(origin)) {
+      return {
+        allowed: false,
+        status: 'boundary',
+        code: 'origin',
+        reason: `page_upload requested on an origin outside this session: ${origin}`,
+        origin,
+      }
+    }
+    const item = request.item ?? {}
+    if (String(item.tag ?? '').toLowerCase() !== 'input' || String(item.type ?? '').toLowerCase() !== 'file') {
+      return { allowed: false, status: 'blocked', code: 'upload', reason: 'page_upload may target only <input type="file"> elements' }
+    }
+    return { allowed: true }
+  }
+
+  if (
+    request.name === 'page_drag' ||
+    (request.name === 'page_click' && !request.item && request.currentUrl !== undefined)
+  ) {
+    const origin = exactOrigin(request.currentUrl)
+    if (!origin) {
+      return { allowed: false, status: 'blocked', code: 'scheme', reason: `${request.name} may run only on HTTP or HTTPS pages` }
+    }
+    if (!allowed.has(origin)) {
+      return {
+        allowed: false,
+        status: 'boundary',
+        code: 'origin',
+        reason: `${request.name} requested on an origin outside this session: ${origin}`,
+        origin,
+      }
+    }
+    if (!request.item) return { allowed: true }
   }
 
   const item = request.item ?? {}

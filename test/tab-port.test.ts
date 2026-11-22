@@ -40,6 +40,9 @@ function makeFakeWebContents(initialUrl = 'https://example.com/') {
     cdpCalls.push({ method, params })
     if (method === 'Runtime.evaluate') {
       const expr = String(params?.expression ?? '')
+      if (params?.returnByValue === false) {
+        return { result: { type: 'object', subtype: 'node', objectId: 'obj-file-1' } }
+      }
       if (expr.includes('document.readyState')) {
         return { result: { type: 'string', value: JSON.stringify({ readyState: 'complete', fontsReady: true, quiet: 2, sig: '1280x720x10' }) } }
       }
@@ -204,6 +207,108 @@ describe('createTabPort browser-user primitives', () => {
 
     const reloaded = await port.history('reload')
     expect(reloaded).toMatchObject({ ok: true, direction: 'reload', title: 'Reloaded' })
+
+    await port.close()
+  })
+
+  it('dispatches clickPoint (left, right, double, middle), dragPoints, and setFileInputFiles via CDP', async () => {
+    const { wc, cdpCalls } = makeFakeWebContents()
+    const port = createTabPort(wc as never, { tabId: 3 })
+
+    // Right-click
+    await port.clickPoint(50.4, 80.6, { button: 'right', clickCount: 1 })
+    const rightEvents = cdpCalls.filter((c) => c.method === 'Input.dispatchMouseEvent')
+    expect(rightEvents.map((e) => e.params)).toEqual([
+      { type: 'mouseMoved', x: 50, y: 81, button: 'none', buttons: 0 },
+      { type: 'mousePressed', x: 50, y: 81, button: 'right', buttons: 2, clickCount: 1 },
+      { type: 'mouseReleased', x: 50, y: 81, button: 'right', buttons: 0, clickCount: 1 },
+    ])
+
+    // Double left click
+    cdpCalls.length = 0
+    await port.clickPoint(10, 20, { button: 'left', clickCount: 2 })
+    expect(cdpCalls.filter((c) => c.method === 'Input.dispatchMouseEvent').map((e) => [e.params?.type, e.params?.clickCount])).toEqual([
+      ['mouseMoved', undefined],
+      ['mousePressed', 1],
+      ['mouseReleased', 1],
+      ['mousePressed', 2],
+      ['mouseReleased', 2],
+    ])
+
+    // Drag in 4 interpolated steps
+    cdpCalls.length = 0
+    await port.dragPoints(0, 0, 100, 40, 4)
+    const dragEvents = cdpCalls.filter((c) => c.method === 'Input.dispatchMouseEvent')
+    expect(dragEvents).toHaveLength(7) // move(start), down, 4 moves, up
+    expect(dragEvents[0]?.params).toMatchObject({ type: 'mouseMoved', x: 0, y: 0 })
+    expect(dragEvents[1]?.params).toMatchObject({ type: 'mousePressed', x: 0, y: 0, button: 'left', buttons: 1 })
+    expect(dragEvents[3]?.params).toMatchObject({ type: 'mouseMoved', x: 50, y: 20, button: 'left', buttons: 1 })
+    expect(dragEvents[6]?.params).toMatchObject({ type: 'mouseReleased', x: 100, y: 40, button: 'left', buttons: 0 })
+
+    // setFileInputFiles via objectId + releaseObject
+    cdpCalls.length = 0
+    await port.setFileInputFiles('#upload', ['/tmp/sample.txt'])
+    expect(cdpCalls.find((c) => c.method === 'DOM.setFileInputFiles')?.params).toEqual({
+      objectId: 'obj-file-1',
+      files: ['/tmp/sample.txt'],
+    })
+    expect(cdpCalls.find((c) => c.method === 'Runtime.releaseObject')?.params).toEqual({
+      objectId: 'obj-file-1',
+    })
+
+    await port.close()
+  })
+
+  it('auto-handles JS dialogs to prevent deadlocks and respects armed accept/promptText', async () => {
+    const { wc, cdpCalls } = makeFakeWebContents()
+    const port = createTabPort(wc as never, { tabId: 4 })
+
+    // Trigger attach and confirm Page.enable is called
+    await port.evaluate('1')
+    expect(cdpCalls.some((c) => c.method === 'Page.enable')).toBe(true)
+
+    // Unarmed alert -> auto-accept
+    wc.debugger.emit('message', {}, 'Page.javascriptDialogOpening', {
+      type: 'alert',
+      message: 'Saved!',
+      defaultPrompt: '',
+      url: 'https://example.com/',
+    })
+    // Unarmed confirm -> auto-dismiss
+    wc.debugger.emit('message', {}, 'Page.javascriptDialogOpening', {
+      type: 'confirm',
+      message: 'Delete item?',
+      defaultPrompt: '',
+      url: 'https://example.com/',
+    })
+
+    const dialogCalls = cdpCalls.filter((c) => c.method === 'Page.handleJavaScriptDialog')
+    expect(dialogCalls.map((c) => c.params)).toEqual([
+      { accept: true },
+      { accept: false },
+    ])
+
+    // Arm accept with promptText
+    const armedRes = await port.handleDialog({ action: 'accept', promptText: 'TroyUser' })
+    expect(armedRes).toMatchObject({ ok: true, armed: { accept: true, promptText: 'TroyUser' } })
+
+    wc.debugger.emit('message', {}, 'Page.javascriptDialogOpening', {
+      type: 'prompt',
+      message: 'Your name?',
+      defaultPrompt: 'Anon',
+      url: 'https://example.com/',
+    })
+
+    const status = await port.handleDialog({ action: 'status' })
+    expect(status.ok).toBe(true)
+    expect(status.armed).toBeNull()
+    expect(status.history).toHaveLength(3)
+    expect(status.history?.[0]).toMatchObject({ type: 'alert', handled: 'auto-accept' })
+    expect(status.history?.[1]).toMatchObject({ type: 'confirm', handled: 'auto-dismiss' })
+    expect(status.history?.[2]).toMatchObject({ type: 'prompt', handled: 'armed-accept', promptText: 'TroyUser' })
+
+    const lastHandle = cdpCalls.filter((c) => c.method === 'Page.handleJavaScriptDialog').at(-1)
+    expect(lastHandle?.params).toEqual({ accept: true, promptText: 'TroyUser' })
 
     await port.close()
   })
